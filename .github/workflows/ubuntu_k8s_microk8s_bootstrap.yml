@@ -1,0 +1,119 @@
+name: ubuntu_k8s_microk8s_bootstrap
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+    - 'ubuntu_k8s_microk8s_bootstrap/**'
+  pull_request:
+    branches: [ main ]
+    paths:
+    - 'ubuntu_k8s_microk8s_bootstrap/**'
+  workflow_dispatch:
+    inputs:
+      playbook:
+        description: Playbook to run
+        required: true
+        default: install-master
+        type: choice
+        options:
+        - install-master
+        - install-worker
+        - uninstall-master
+        - uninstall-worker
+      host:
+        description: Target server IP/hostname
+        required: true
+      ansible_user:
+        description: SSH username
+        required: true
+        default: ubuntu
+      master_host:
+        description: Existing master IP/hostname (required for the worker playbooks)
+        required: false
+        default: ''
+      microk8s_join_token:
+        description: MicroK8s join string, e.g. 192.168.1.100:25000/<token> (workers only, skips auto-minting)
+        required: false
+        default: ''
+
+jobs:
+  syntax-check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Ansible
+      run: |
+        python3 -m pip install --upgrade pip
+        pip install ansible
+
+    - name: Build and install collection
+      run: |
+        cd ubuntu_k8s_microk8s_bootstrap
+        ansible-galaxy collection build
+        ansible-galaxy collection install marcuwynu23-ubuntu_k8s_microk8s_bootstrap-*.tar.gz
+
+    - name: Syntax check playbooks
+      run: |
+        cd ubuntu_k8s_microk8s_bootstrap
+        for playbook in install-master install-worker uninstall-master uninstall-worker; do
+          echo "Checking playbooks/${playbook}.yml"
+          ansible-playbook playbooks/${playbook}.yml --syntax-check
+        done
+
+  deploy:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Install Ansible
+      run: |
+        python3 -m pip install --upgrade pip
+        pip install ansible
+
+    - name: Build and install collection
+      run: |
+        cd ubuntu_k8s_microk8s_bootstrap
+        ansible-galaxy collection build
+        ansible-galaxy collection install marcuwynu23-ubuntu_k8s_microk8s_bootstrap-*.tar.gz
+
+    - name: Create inventory
+      run: |
+        mkdir -p ~/.ssh
+        echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
+        chmod 600 ~/.ssh/id_rsa
+        ssh-keyscan -H ${{ github.event.inputs.host }} >> ~/.ssh/known_hosts
+        GROUP=master
+        if [[ "${{ github.event.inputs.playbook }}" == *"-worker" ]]; then
+          GROUP=worker
+        fi
+        cat > inventory.ini <<EOF
+        [${GROUP}]
+        ${{ github.event.inputs.host }} ansible_user=${{ github.event.inputs.ansible_user }} ansible_ssh_private_key_file=~/.ssh/id_rsa
+
+        [${GROUP}:vars]
+        ansible_python_interpreter=/usr/bin/python3
+        EOF
+        # The worker playbooks mint a join token on the master with
+        # `microk8s add-node`, so they need a [master] group to delegate to.
+        if [[ "${GROUP}" == "worker" && -n "${{ github.event.inputs.master_host }}" ]]; then
+          ssh-keyscan -H ${{ github.event.inputs.master_host }} >> ~/.ssh/known_hosts
+          cat >> inventory.ini <<EOF
+
+        [master]
+        ${{ github.event.inputs.master_host }} ansible_user=${{ github.event.inputs.ansible_user }} ansible_ssh_private_key_file=~/.ssh/id_rsa
+        EOF
+        fi
+
+    - name: Run ${{ github.event.inputs.playbook }} playbook
+      run: |
+        EXTRA_ARGS=""
+        if [ -n "${{ github.event.inputs.microk8s_join_token }}" ]; then
+          EXTRA_ARGS="$EXTRA_ARGS -e microk8s_join_token=${{ github.event.inputs.microk8s_join_token }}"
+        fi
+        cd ubuntu_k8s_microk8s_bootstrap
+        ansible-playbook playbooks/${{ github.event.inputs.playbook }}.yml \
+          -i ../inventory.ini $EXTRA_ARGS
