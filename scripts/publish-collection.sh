@@ -17,6 +17,8 @@ if [ -z "$1" ]; then
   echo "  - fedora_k8s_rke2_bootstrap"
   echo "  - ubuntu_k8s_k3s_bootstrap"
   echo "  - ubuntu_k8s_rke2_bootstrap"
+  echo "  - fedora_k8s_microk8s_bootstrap"
+  echo "  - ubuntu_k8s_microk8s_bootstrap"
   exit 1
 fi
 

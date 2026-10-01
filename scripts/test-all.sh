@@ -17,6 +17,8 @@ COLLECTIONS=(
   "fedora_k8s_rke2_bootstrap"
   "ubuntu_k8s_k3s_bootstrap"
   "ubuntu_k8s_rke2_bootstrap"
+  "fedora_k8s_microk8s_bootstrap"
+  "ubuntu_k8s_microk8s_bootstrap"
 )
 
 # Function to test a single collection
