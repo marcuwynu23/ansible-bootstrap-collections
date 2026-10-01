@@ -1,0 +1,156 @@
+---
+# Fedora preparation for MicroK8s Kubernetes nodes.
+# Replaces the old Ubuntu-only notes (apt/netplan) with real Fedora tasks.
+
+- name: Check that target is a Fedora / RHEL family host
+  assert:
+    that:
+      - ansible_os_family == "RedHat"
+    fail_msg: "The pre role only supports Fedora / RHEL family hosts (got {{ ansible_os_family }} / {{ ansible_distribution }})."
+    success_msg: "Preparing {{ ansible_distribution }} {{ ansible_distribution_version }} for MicroK8s."
+
+- name: Set hostname when pre_hostname is defined
+  hostname:
+    name: "{{ pre_hostname }}"
+  become: true
+  when: pre_hostname | length > 0
+
+- name: Update all system packages (dnf upgrade)
+  dnf:
+    name: "*"
+    state: latest
+    update_cache: true
+  become: true
+  retries: 3
+  delay: 10
+  register: pre_dnf_upgrade
+  until: pre_dnf_upgrade is not failed
+  when: pre_update_system | bool
+
+- name: Install base packages for Kubernetes / MicroK8s
+  dnf:
+    name: "{{ pre_base_packages }}"
+    state: present
+    update_cache: true
+  become: true
+  retries: 5
+  delay: 10
+  register: pre_dnf_base
+  until: pre_dnf_base is not failed
+
+- name: Ensure firewalld is running when managing firewall
+  service:
+    name: firewalld
+    state: started
+    enabled: true
+  become: true
+  when: pre_firewall_manage | bool
+
+- name: Open MicroK8s firewall ports
+  firewalld:
+    port: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: "{{ pre_firewall_ports }}"
+  become: true
+  when: pre_firewall_manage | bool
+
+- name: Disable swap at runtime (required by Kubernetes)
+  command: swapoff -a
+  changed_when: true
+  become: true
+  when:
+    - pre_disable_swap | bool
+    - ansible_swaptotal_mb | default(0) | int > 0
+
+- name: Remove swap entries from /etc/fstab (persist across reboots)
+  mount:
+    name: swap
+    fstype: swap
+    state: absent
+  become: true
+  when: pre_disable_swap | bool
+
+- name: Comment out any remaining swap lines in /etc/fstab
+  replace:
+    path: /etc/fstab
+    regexp: '^([^#\s].*\sswap\s.*)$'
+    replace: '# \1'
+  become: true
+  when: pre_disable_swap | bool
+
+- name: Persist required kernel modules in /etc/modules-load.d/k8s.conf
+  copy:
+    dest: /etc/modules-load.d/k8s.conf
+    mode: "0644"
+    content: "{{ pre_kernel_modules | join('\n') }}\n"
+  become: true
+  notify: Reload sysctl
+
+- name: Load required kernel modules now
+  modprobe:
+    name: "{{ item }}"
+    state: present
+  loop: "{{ pre_kernel_modules }}"
+  become: true
+
+- name: Apply Kubernetes sysctl parameters
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/99-k8s-microk8s.conf
+    state: present
+    reload: true
+  loop: "{{ pre_sysctl_params | dict2items }}"
+  become: true
+
+- name: Set SELinux mode at runtime
+  command: "setenforce {{ 0 if pre_selinux_state == 'permissive' else 1 }}"
+  changed_when: true
+  become: true
+  failed_when: false
+  when: pre_selinux_state in ["permissive", "enforcing"]
+
+- name: Persist SELinux mode in /etc/selinux/config
+  lineinfile:
+    path: /etc/selinux/config
+    regexp: '^SELINUX='
+    line: "SELINUX={{ pre_selinux_state }}"
+  become: true
+  when: pre_selinux_state in ["permissive", "enforcing", "disabled"]
+
+- name: Ensure NetworkManager is running (Fedora uses NM, not netplan)
+  service:
+    name: NetworkManager
+    state: started
+    enabled: true
+  become: true
+
+# --- snapd: Fedora does not ship it, but MicroK8s is distributed as a snap.
+# The symlink must exist before the first `snap install`, and the target only
+# appears once the snapd package (in pre_base_packages) is installed.
+
+- name: Ensure the /snap symlink exists (snapd requirement on Fedora)
+  file:
+    src: /var/lib/snapd/snap
+    dest: /snap
+    state: link
+    force: true
+  become: true
+  when: pre_manage_snap | bool
+
+- name: Enable and start snapd.socket
+  systemd:
+    name: snapd.socket
+    state: started
+    enabled: true
+  become: true
+  when: pre_manage_snap | bool
+
+- name: Wait for the snapd seed to finish loading
+  command: snap wait system seed.loaded
+  changed_when: false
+  failed_when: false
+  become: true
+  when: pre_manage_snap | bool

@@ -1,0 +1,63 @@
+---
+# Joins MicroK8s workers on the [worker] group to an existing cluster.
+# The join token is minted automatically on the master with `microk8s add-node`,
+# so a [master] group must be present in the inventory. You can bypass that by
+# passing a token you generated yourself:
+#   -e microk8s_join_token=<master-ip>:25000/<token>
+# Usage:
+#   ansible-playbook -i inventory.ini playbooks/install-worker.yml
+- name: Install MicroK8s worker node on Fedora
+  hosts: worker
+  become: true
+  vars:
+    containerd_enabled: false
+    containerd_state: present
+    microk8s_node_type: worker
+    microk8s_state: present
+    microk8s_channel: stable
+    # Addons are enabled on the control-plane only.
+    microk8s_addons: []
+    # Empty means "mint one on the master with microk8s add-node".
+    microk8s_join_token: ""
+    # Lifetime of a minted token, in seconds (0 = never expires).
+    microk8s_join_token_ttl: 3600
+    # Which host mints the token: the first [master] group member.
+    microk8s_master_host: "{{ groups['master'] | default([]) | first | default('', true) }}"
+  roles:
+    - roles/pre
+    - roles/containerd
+    - roles/microk8s
+  pre_tasks:
+    - name: Mint a MicroK8s join token on the master
+      command: microk8s add-node --token-ttl {{ microk8s_join_token_ttl }}
+      delegate_to: "{{ microk8s_master_host }}"
+      run_once: true
+      register: microk8s_add_node
+      changed_when: false
+      retries: 3
+      delay: 10
+      until: microk8s_add_node is not failed
+      when:
+        - microk8s_join_token | length == 0
+        - microk8s_master_host | length > 0
+
+    # `microk8s add-node` prints several candidate join lines (default
+    # interface first, then per-interface alternates); take the first. If the
+    # output does not parse, fall back to "" so the assert below explains why.
+    - name: Derive the join string from the add-node output
+      set_fact:
+        microk8s_join_token: "{{ (microk8s_add_node.stdout | regex_findall('microk8s join (\\S+)') | first) | default('', true) }}"
+      run_once: true
+      when:
+        - microk8s_join_token | length == 0
+        - microk8s_master_host | length > 0
+
+    - name: Require a MicroK8s join token for workers
+      assert:
+        that:
+          - microk8s_join_token | length > 0
+        fail_msg: >-
+          No MicroK8s join token available. Either add a [master] group to the
+          inventory so the token can be minted with `microk8s add-node`, or pass
+          one explicitly with -e microk8s_join_token=<master-ip>:25000/<token>
+          (run `microk8s add-node` on the master to generate it).

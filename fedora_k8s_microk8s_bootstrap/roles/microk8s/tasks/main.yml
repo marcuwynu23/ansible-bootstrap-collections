@@ -1,0 +1,166 @@
+---
+# tasks file for microk8s (Fedora).
+# Installs MicroK8s from the snap store, enables addons on the control-plane and
+# joins workers to an existing cluster.
+# NOTE: MicroK8s ships its own containerd, kubelet and control plane inside the
+# snap, so nothing here shares state with a system containerd.
+
+- name: Set MicroK8s facts
+  set_fact:
+    microk8s_desired_state: "{{ microk8s_state | default('present') }}"
+    microk8s_node_role: "{{ microk8s_node_type | default('control-plane') | lower }}"
+
+- name: Validate microk8s_node_type
+  assert:
+    that:
+      - microk8s_node_role in ["control-plane", "worker"]
+    fail_msg: "microk8s_node_type must be 'control-plane' or 'worker' (got '{{ microk8s_node_type }}')."
+
+- name: Validate worker join variables
+  assert:
+    that:
+      - microk8s_join_token | length > 0
+    fail_msg: >-
+      MicroK8s workers require microk8s_join_token in the form
+      "<master-ip>:25000/<token>". Generate one on the master with
+      `microk8s add-node`, or run install-worker.yml, which mints it for you.
+  when:
+    - microk8s_desired_state == "present"
+    - microk8s_node_role == "worker"
+
+- name: Check whether the MicroK8s snap is installed
+  command: snap list microk8s
+  register: microk8s_snap_list
+  changed_when: false
+  failed_when: false
+  become: true
+
+- name: Uninstall MicroK8s when state is absent
+  block:
+    - name: Leave the MicroK8s cluster
+      command: microk8s leave
+      changed_when: true
+      failed_when: false
+      become: true
+      when: microk8s_snap_list.rc == 0
+
+    - name: Remove the MicroK8s snap and its data
+      command: snap remove microk8s --purge
+      changed_when: true
+      become: true
+      when: microk8s_snap_list.rc == 0
+
+    - name: Remove leftover MicroK8s data directory
+      file:
+        path: /var/snap/microk8s
+        state: absent
+      become: true
+  when: microk8s_desired_state == "absent"
+
+- name: Install and configure MicroK8s
+  block:
+    - name: Install the MicroK8s snap
+      command: snap install microk8s --classic --channel={{ microk8s_channel }}
+      become: true
+      retries: 3
+      delay: 10
+      register: microk8s_snap_install
+      until: microk8s_snap_install is not failed
+      when: microk8s_snap_list.rc != 0
+
+    - name: Move an existing MicroK8s snap to the requested channel
+      command: snap refresh microk8s --channel={{ microk8s_channel }}
+      become: true
+      register: microk8s_snap_refresh
+      changed_when: "'has no updates available' not in microk8s_snap_refresh.stdout"
+      notify: Restart MicroK8s
+      when: microk8s_snap_list.rc == 0
+
+    - name: Wait for MicroK8s to be ready (control-plane)
+      command: microk8s status --wait-ready --timeout {{ microk8s_wait_ready_timeout }}
+      changed_when: false
+      become: true
+      when: microk8s_node_role == "control-plane"
+
+    - name: Enable MicroK8s addons (control-plane)
+      command: microk8s enable {{ item }}
+      loop: "{{ microk8s_addons }}"
+      register: microk8s_addon_result
+      changed_when: "'already enabled' not in microk8s_addon_result.stdout"
+      become: true
+      when:
+        - microk8s_node_role == "control-plane"
+        - microk8s_addons | length > 0
+
+    # MicroK8s has no node-token file: the join string is minted on demand by
+    # `microk8s add-node`. install-worker.yml does that on the master and passes
+    # the result in as microk8s_join_token.
+    - name: Join this node to the MicroK8s cluster (worker)
+      command: "microk8s join {{ microk8s_join_token }}{{ ' --worker' if microk8s_join_as_worker | bool else '' }}"
+      register: microk8s_join
+      changed_when: microk8s_join.rc == 0
+      # Tolerate a re-run on an already-joined node instead of matching on
+      # version-specific status strings.
+      failed_when:
+        - microk8s_join.rc != 0
+        - "'already' not in microk8s_join.stdout"
+        - "'already' not in microk8s_join.stderr"
+      become: true
+      when: microk8s_node_role == "worker"
+
+    - name: Wait for this node to report Ready (worker)
+      command: >-
+        microk8s kubectl wait --for=condition=Ready
+        node/{{ ansible_hostname | default(inventory_hostname) }}
+        --timeout={{ microk8s_wait_ready_timeout }}s
+      changed_when: false
+      become: true
+      retries: 5
+      delay: 20
+      register: microk8s_node_ready
+      until: microk8s_node_ready is not failed
+      when: microk8s_node_role == "worker"
+
+    - name: Open MicroK8s firewall ports (control-plane)
+      firewalld:
+        port: "{{ item }}"
+        permanent: true
+        immediate: true
+        state: enabled
+      loop:
+        - 16443/tcp
+        - 10250/tcp
+        - 10255/tcp
+        - 25000/tcp
+        - 12379/tcp
+        - 4789/udp
+        - 32000-32767/tcp
+        - 32000-32767/udp
+      become: true
+      when:
+        - microk8s_firewall_manage | bool
+        - microk8s_node_role == "control-plane"
+
+    - name: Open MicroK8s firewall ports (worker)
+      firewalld:
+        port: "{{ item }}"
+        permanent: true
+        immediate: true
+        state: enabled
+      loop:
+        - 10250/tcp
+        - 10255/tcp
+        - 4789/udp
+      become: true
+      when:
+        - microk8s_firewall_manage | bool
+        - microk8s_node_role == "worker"
+
+    - name: Show cluster info for control-plane nodes
+      debug:
+        msg: >-
+          MicroK8s control-plane is ready. Kubeconfig: `microk8s config`
+          (/var/snap/microk8s/current/credentials/client.config). Join more nodes with
+          `microk8s add-node`, or run playbooks/install-worker.yml.
+      when: microk8s_node_role == "control-plane"
+  when: microk8s_desired_state == "present"

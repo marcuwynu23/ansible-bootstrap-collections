@@ -1,0 +1,44 @@
+---
+# defaults file for pre (Fedora K8s node preparation)
+pre_hostname: ""
+pre_update_system: true
+pre_disable_swap: true
+pre_selinux_state: permissive
+pre_firewall_manage: true
+# MicroK8s is distributed as a snap, which Fedora does not ship by default.
+# Set false if you install/seed snapd by other means.
+pre_manage_snap: true
+pre_base_packages:
+  - curl
+  - iptables
+  - iptables-nft
+  - socat
+  - conntrack-tools
+  - policycoreutils
+  - policycoreutils-python-utils
+  - firewalld
+  - NetworkManager
+  - ca-certificates
+  - tar
+  - snapd
+pre_kernel_modules:
+  - overlay
+  - br_netfilter
+pre_sysctl_params:
+  net.bridge.bridge-nf-call-iptables: 1
+  net.bridge.bridge-nf-call-ip6tables: 1
+  net.ipv4.ip_forward: 1
+# MicroK8s ports opened when pre_firewall_manage is true.
+# 16443 API server (the kubeconfig endpoint), 10250/10255 kubelet,
+# 25000 cluster agent (cluster join/formation), 12379 dqlite datastore,
+# 4789/udp VXLAN (Calico pod network, multi-node), and 32000-32767
+# NodePorts — note MicroK8s uses 32000-32767, not the 30000-32767 default.
+pre_firewall_ports:
+  - 16443/tcp
+  - 10250/tcp
+  - 10255/tcp
+  - 25000/tcp
+  - 12379/tcp
+  - 4789/udp
+  - 32000-32767/tcp
+  - 32000-32767/udp

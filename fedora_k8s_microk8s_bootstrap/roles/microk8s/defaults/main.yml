@@ -1,0 +1,23 @@
+---
+# defaults file for microk8s (Fedora)
+# microk8s_node_type: "control-plane" for the first node, "worker" to join.
+microk8s_node_type: control-plane
+microk8s_state: present
+# Snap channel. "stable" tracks the latest stable release; pin a minor release
+# such as "1.30/stable" or "1.30/candidate" for reproducibility.
+microk8s_channel: stable
+# Addons enabled on the control-plane via `microk8s enable` (idempotent).
+microk8s_addons:
+  - dns
+  - hostpath-storage
+  - ingress
+# Join string as "<master-ip>:25000/<token>". Required for workers;
+# install-worker.yml mints one automatically with `microk8s add-node`.
+microk8s_join_token: ""
+# Pass --worker so a joining node does not run the control plane.
+microk8s_join_as_worker: true
+# Seconds to wait for MicroK8s / the node to report ready.
+microk8s_wait_ready_timeout: 300
+microk8s_firewall_manage: true
+# Only used by uninstall-worker.yml.
+microk8s_deregister_from_master: true

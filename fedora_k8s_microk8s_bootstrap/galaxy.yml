@@ -1,0 +1,16 @@
+namespace: marcuwynu23
+name: fedora_k8s_microk8s_bootstrap
+version: 1.0.0
+readme: README.md
+authors:
+- Mark Wayne
+description: "Ansible collection for Setup K8s microk8s in Fedora Virtual Machine"
+license: [ "MIT" ]
+tags:
+- linux
+- fedora
+- kubernetes
+- microk8s
+- k8s
+- vm
+repository: https://github.com/marcuwynu23/ansible-collections

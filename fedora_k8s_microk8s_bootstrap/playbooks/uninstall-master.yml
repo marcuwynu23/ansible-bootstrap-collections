@@ -1,0 +1,14 @@
+---
+# Removes MicroK8s from the [master] group (snap remove microk8s --purge).
+# Usage: ansible-playbook -i inventory.ini playbooks/uninstall-master.yml
+- name: Uninstall MicroK8s master (control-plane) node on Fedora
+  hosts: master
+  become: true
+  vars:
+    containerd_enabled: false
+    containerd_state: absent
+    microk8s_node_type: control-plane
+    microk8s_state: absent
+  roles:
+    - roles/microk8s
+    - roles/containerd
