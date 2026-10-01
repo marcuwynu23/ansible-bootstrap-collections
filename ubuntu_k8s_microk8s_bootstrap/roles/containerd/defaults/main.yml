@@ -1,0 +1,10 @@
+---
+# defaults file for containerd (Ubuntu)
+# NOTE: MicroK8s bundles and manages its own containerd internally and cannot
+# use a system-wide one. This role exists for parity with the k3s/rke2
+# collections; leave containerd_enabled: false unless you independently want a
+# standalone system containerd on the host.
+containerd_state: present
+containerd_enabled: true
+containerd_config_path: /etc/containerd/config.toml
+containerd_systemd_cgroup: true

@@ -1,0 +1,5 @@
+---
+- name: Restart MicroK8s
+  command: snap restart microk8s
+  changed_when: true
+  become: true

@@ -1,0 +1,109 @@
+---
+# tasks file for containerd (Ubuntu, apt-based).
+
+- name: Set desired containerd state
+  set_fact:
+    containerd_desired_state: "{{ containerd_state | default('present') }}"
+
+- name: Skip containerd management when disabled (e.g. MicroK8s bundled containerd)
+  debug:
+    msg: "containerd role skipped (containerd_enabled=false). MicroK8s bundles and manages its own containerd."
+  when: not (containerd_enabled | default(true) | bool)
+
+- name: Install containerd package (Ubuntu)
+  apt:
+    name: containerd
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  become: true
+  retries: 5
+  delay: 10
+  register: containerd_apt_install
+  until: containerd_apt_install is not failed
+  when:
+    - containerd_enabled | default(true) | bool
+    - containerd_desired_state == "present"
+
+- name: Create containerd config directory
+  file:
+    path: "{{ containerd_config_path | dirname }}"
+    state: directory
+    mode: "0755"
+  become: true
+  when:
+    - containerd_enabled | default(true) | bool
+    - containerd_desired_state == "present"
+
+- name: Check if containerd config already exists
+  stat:
+    path: "{{ containerd_config_path }}"
+  register: containerd_config_stat
+  become: true
+  when:
+    - containerd_enabled | default(true) | bool
+    - containerd_desired_state == "present"
+
+- name: Generate default containerd config
+  shell: containerd config default > {{ containerd_config_path | quote }}
+  args:
+    creates: "{{ containerd_config_path }}"
+  become: true
+  when:
+    - containerd_enabled | default(true) | bool
+    - containerd_desired_state == "present"
+    - not containerd_config_stat.stat.exists
+
+- name: Enable SystemdCgroup in containerd config
+  lineinfile:
+    path: "{{ containerd_config_path }}"
+    regexp: '^(\s*)SystemdCgroup\s*=.*$'
+    line: '\1SystemdCgroup = true'
+    backrefs: true
+  become: true
+  notify: Restart containerd
+  when:
+    - containerd_enabled | default(true) | bool
+    - containerd_desired_state == "present"
+    - containerd_systemd_cgroup | bool
+
+- name: Enable and start containerd service
+  systemd:
+    name: containerd
+    state: started
+    enabled: true
+    daemon_reload: true
+  become: true
+  when:
+    - containerd_enabled | default(true) | bool
+    - containerd_desired_state == "present"
+
+- name: Stop and disable containerd service when removing
+  systemd:
+    name: containerd
+    state: stopped
+    enabled: false
+  become: true
+  ignore_errors: true
+  when:
+    - containerd_enabled | default(true) | bool
+    - containerd_desired_state == "absent"
+
+- name: Remove containerd package when absent
+  apt:
+    name: containerd
+    state: absent
+    autoremove: true
+  become: true
+  when:
+    - containerd_enabled | default(true) | bool
+    - containerd_desired_state == "absent"
+
+- name: Remove containerd config when absent
+  file:
+    path: "{{ containerd_config_path }}"
+    state: absent
+  become: true
+  when:
+    - containerd_enabled | default(true) | bool
+    - containerd_desired_state == "absent"

@@ -1,0 +1,31 @@
+---
+# Installs the MicroK8s control-plane on the [master] group (first node).
+# Usage:
+#   cp playbooks/inventory.ini.example inventory.ini  # adjust hosts/key
+#   ansible-playbook -i inventory.ini playbooks/install-master.yml
+- name: Install MicroK8s master (control-plane) node on Ubuntu
+  hosts: master
+  become: true
+  vars:
+    # Standalone containerd is not needed: MicroK8s bundles and manages its
+    # own containerd internally. Set to true only if you also want a system
+    # containerd running alongside it.
+    containerd_enabled: false
+    containerd_state: present
+    microk8s_node_type: control-plane
+    microk8s_state: present
+    # Snap channel. "stable" tracks the latest stable release; pin a minor
+    # release such as "1.30/stable" for reproducibility.
+    microk8s_channel: stable
+    # Addons enabled via `microk8s enable` (enabling is idempotent).
+    microk8s_addons:
+    - dns
+    - hostpath-storage
+    - ingress
+  roles:
+  - roles/pre
+  - roles/containerd
+  - roles/microk8s
+  # After install:
+  #   microk8s config          # kubeconfig
+  #   microk8s add-node        # join string for workers

@@ -1,0 +1,140 @@
+---
+# Ubuntu preparation for MicroK8s Kubernetes nodes.
+# apt-based counterpart of the Fedora pre role (no dnf/firewalld/SELinux).
+# Ubuntu runs AppArmor (MicroK8s-compatible defaults), so no SELinux tasks here.
+
+- name: Check that target is an Ubuntu / Debian family host
+  assert:
+    that:
+      - ansible_os_family == "Debian"
+    fail_msg: "The pre role only supports Ubuntu / Debian family hosts (got {{ ansible_os_family }} / {{ ansible_distribution }})."
+    success_msg: "Preparing {{ ansible_distribution }} {{ ansible_distribution_version }} for MicroK8s."
+
+- name: Set hostname when pre_hostname is defined
+  hostname:
+    name: "{{ pre_hostname }}"
+  become: true
+  when: pre_hostname | length > 0
+
+- name: Update all system packages (apt upgrade)
+  apt:
+    name: "*"
+    state: latest
+    update_cache: true
+    cache_valid_time: 3600
+  become: true
+  retries: 3
+  delay: 10
+  register: pre_apt_upgrade
+  until: pre_apt_upgrade is not failed
+  when: pre_update_system | bool
+
+- name: Install base packages for Kubernetes / MicroK8s
+  apt:
+    name: "{{ pre_base_packages }}"
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+  become: true
+  retries: 5
+  delay: 10
+  register: pre_apt_base
+  until: pre_apt_base is not failed
+
+- name: Read current ufw status
+  command: ufw status
+  register: pre_ufw_status
+  changed_when: false
+  become: true
+  when: pre_firewall_manage | bool
+
+- name: Allow SSH before enabling ufw (avoid locking yourself out)
+  command: "ufw allow {{ pre_firewall_allow_ssh_port }}"
+  become: true
+  when:
+    - pre_firewall_manage | bool
+    - pre_firewall_allow_ssh_port | length > 0
+    - pre_firewall_allow_ssh_port not in pre_ufw_status.stdout
+
+- name: Open MicroK8s firewall ports
+  command: "ufw allow {{ item }}"
+  loop: "{{ pre_firewall_ports }}"
+  become: true
+  when:
+    - pre_firewall_manage | bool
+    - item not in pre_ufw_status.stdout
+
+- name: Enable ufw when inactive
+  command: ufw --force enable
+  become: true
+  changed_when: true
+  when:
+    - pre_firewall_manage | bool
+    - "'Status: active' not in pre_ufw_status.stdout"
+
+- name: Disable swap at runtime (required by Kubernetes)
+  command: swapoff -a
+  changed_when: true
+  become: true
+  when:
+    - pre_disable_swap | bool
+    - ansible_swaptotal_kb | default(0) | int > 0
+
+- name: Remove swap entries from /etc/fstab (persist across reboots)
+  mount:
+    name: swap
+    fstype: swap
+    state: absent
+  become: true
+  when: pre_disable_swap | bool
+
+- name: Comment out any remaining swap lines in /etc/fstab
+  replace:
+    path: /etc/fstab
+    regexp: '^([^#\s].*\sswap\s.*)$'
+    replace: '# \1'
+  become: true
+  when: pre_disable_swap | bool
+
+- name: Persist required kernel modules in /etc/modules-load.d/k8s.conf
+  copy:
+    dest: /etc/modules-load.d/k8s.conf
+    mode: "0644"
+    content: "{{ pre_kernel_modules | join('\n') }}\n"
+  become: true
+  notify: Reload sysctl
+
+- name: Load required kernel modules now
+  modprobe:
+    name: "{{ item }}"
+    state: present
+  loop: "{{ pre_kernel_modules }}"
+  become: true
+
+- name: Apply Kubernetes sysctl parameters
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/99-k8s-microk8s.conf
+    state: present
+    reload: true
+  loop: "{{ pre_sysctl_params | dict2items }}"
+  become: true
+
+# --- snapd: MicroK8s is distributed as a snap. Ubuntu ships snapd already,
+# so this only guarantees the socket is up before the microk8s role runs.
+
+- name: Enable and start snapd.socket
+  systemd:
+    name: snapd.socket
+    state: started
+    enabled: true
+  become: true
+  when: pre_manage_snap | bool
+
+- name: Wait for the snapd seed to finish loading
+  command: snap wait system seed.loaded
+  changed_when: false
+  failed_when: false
+  become: true
+  when: pre_manage_snap | bool

@@ -1,0 +1,29 @@
+---
+# Removes MicroK8s from the [worker] group. When a [master] group is present the
+# node is also deregistered from the cluster (microk8s remove-node) first, so no
+# stale Node object is left behind.
+# Usage: ansible-playbook -i inventory.ini playbooks/uninstall-worker.yml
+- name: Uninstall MicroK8s worker node on Ubuntu
+  hosts: worker
+  become: true
+  vars:
+    containerd_enabled: false
+    containerd_state: absent
+    microk8s_node_type: worker
+    microk8s_state: absent
+    # Deregister each node on the master before wiping it locally.
+    microk8s_deregister_from_master: true
+    microk8s_master_host: "{{ groups['master'] | default([]) | first | default('', true) }}"
+  roles:
+    - roles/microk8s
+    - roles/containerd
+  pre_tasks:
+    - name: Remove this node from the cluster on the master
+      command: microk8s remove-node {{ ansible_hostname | default(inventory_hostname) }} --force
+      delegate_to: "{{ microk8s_master_host }}"
+      changed_when: true
+      failed_when: false
+      throttle: 1
+      when:
+        - microk8s_deregister_from_master | bool
+        - microk8s_master_host | length > 0
