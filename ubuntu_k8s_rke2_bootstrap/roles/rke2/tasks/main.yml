@@ -43,6 +43,12 @@
         path: /etc/rancher/rke2
         state: absent
       become: true
+
+    - name: Remove root kubeconfig directory
+      file:
+        path: /root/.kube
+        state: absent
+      become: true
   when: rke2_desired_state == "absent"
 
 - name: Install and configure RKE2
@@ -68,16 +74,28 @@
         path: /usr/local/bin/rke2
       register: rke2_binary
 
+    - name: Set RKE2 install environment variables
+      set_fact:
+        rke2_install_env:
+          INSTALL_RKE2_TYPE: "{{ rke2_node_type }}"
+          INSTALL_RKE2_VERSION: "{{ rke2_version }}"
+      when: rke2_version | length > 0
+
+    - name: Set RKE2 install environment variables (with channel)
+      set_fact:
+        rke2_install_env:
+          INSTALL_RKE2_TYPE: "{{ rke2_node_type }}"
+          INSTALL_RKE2_VERSION: "{{ rke2_version }}"
+          INSTALL_RKE2_CHANNEL: "{{ rke2_channel | default('stable') }}"
+      when: rke2_version | length == 0
+
     - name: Install RKE2 via official install script
       shell: |
         set -o pipefail
         curl -sfL {{ rke2_install_script_url | quote }} | sh -
       args:
         executable: /bin/bash
-      environment:
-        INSTALL_RKE2_TYPE: "{{ rke2_node_type }}"
-        INSTALL_RKE2_VERSION: "{{ rke2_version }}"
-        INSTALL_RKE2_CHANNEL: "{{ rke2_channel | default('stable') }}"
+      environment: "{{ rke2_install_env }}"
       become: true
       retries: 3
       delay: 10
@@ -179,6 +197,23 @@
       wait_for:
         path: /var/lib/rancher/rke2/server/node-token
         timeout: 120
+      become: true
+      when: rke2_node_type == "server"
+
+    - name: Configure KUBECONFIG for root user on servers
+      file:
+        path: /root/.kube
+        state: directory
+        mode: "0700"
+      become: true
+      when: rke2_node_type == "server"
+
+    - name: Copy RKE2 kubeconfig to root user directory
+      copy:
+        src: /etc/rancher/rke2/rke2.yaml
+        dest: /root/.kube/config
+        remote_src: true
+        mode: "0600"
       become: true
       when: rke2_node_type == "server"
 
