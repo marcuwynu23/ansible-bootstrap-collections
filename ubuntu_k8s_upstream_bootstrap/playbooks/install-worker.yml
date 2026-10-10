@@ -16,11 +16,22 @@
     pre_disable_swap: true
     pre_firewall_manage: true
     # Kubernetes version (must match control-plane)
+    # Pin a version like "1.37.0-1.1" or "1.36.3-1.1"
     k8s_version: ""
+    # Major version for repository (e.g., "1.37", "1.36"). Auto-derived if empty.
     k8s_major_version: ""
+    # kubeadm config API version (v1beta4 for K8s >= 1.31, v1beta3 for <= 1.30)
+    k8s_kubeadm_api_version: "kubeadm.k8s.io/v1beta4"
     # Required: point at an existing Kubernetes control-plane
     # Format: "host:port" or "ip:port" (default port 6443)
     k8s_control_plane_endpoint: "https://192.168.1.100:6443"
+    # Pod network CIDR (must match control-plane)
+    # Flannel: "10.244.0.0/16", Calico: "192.168.0.0/16"
+    k8s_pod_network_cidr: "10.244.0.0/16"
+    # Service CIDR (must match control-plane)
+    k8s_service_cidr: "10.96.0.0/12"
+    # Node name (defaults to hostname)
+    k8s_node_name: ""
     # Required: join token from control-plane
     # Get with: kubeadm token create
     k8s_join_token: "<get-token-from-control-plane>"
@@ -32,6 +43,32 @@
     containerd_state: present
     # Firewall
     k8s_firewall_manage: true
+    # CNI plugin (must match control-plane, worker only receives CNI via DaemonSet)
+    cni_plugin: "flannel"
+    cni_version: ""
+    # Flannel specific
+    cni_flannel_iface: ""
+    cni_flannel_backend: "vxlan"
+    # Calico specific (must match k8s_pod_network_cidr)
+    cni_calico_ipv4pool_cidr: "{{ k8s_pod_network_cidr }}"
+    cni_calico_ipv4pool_ipip: "Always"
+    cni_calico_ipv4pool_vxlan: "Never"
+    cni_calico_vxlan_port: 4789
+    cni_calico_vxlan_vni: 4096
+    cni_calico_mtu: 1500
+    # Cilium specific
+    cni_cilium_version: ""
+    cni_cilium_install_method: "cli"
+    cni_cilium_kube_proxy_replacement: "strict"
+    cni_cilium_hubble_enabled: true
+    # Weave specific
+    cni_weave_version: ""
+    cni_weave_password: ""
+    # CNI general
+    cni_install_timeout: 300
+    cni_skip_if_already_installed: true
+    cni_wait_for_ready: true
+    cni_wait_timeout: 300
   roles:
     - roles/pre
     - roles/containerd
