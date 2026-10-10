@@ -36,6 +36,8 @@
     k8s_discovery_token_ca_cert_hash: ""
     # Certificate key for additional control-planes (get from first control-plane: kubeadm init phase upload-certs --upload-certs)
     k8s_certificate_key: ""
+    # Node role (control-plane or worker)
+    k8s_node_role: "control-plane"
     # Containerd (CRI)
     containerd_enabled: true
     containerd_state: present
