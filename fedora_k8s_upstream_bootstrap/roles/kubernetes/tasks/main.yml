@@ -51,6 +51,22 @@
       ignore_errors: true
       when: k8s_desired_state == "absent"
 
+    - name: Kill any remaining Kubernetes static pod processes
+      command: >
+        bash -c 'pkill -9 -f "kube-apiserver|kube-controller-manager|kube-scheduler|etcd" 2>/dev/null; pkill -9 -f "kube-proxy|kubelet" 2>/dev/null; pkill -9 -f "coredns" 2>/dev/null; true'
+      become: true
+      ignore_errors: true
+      changed_when: false
+      when: k8s_desired_state == "absent"
+
+    - name: Remove kubelet generated static pod manifests
+      file:
+        path: /etc/kubernetes/manifests
+        state: absent
+      become: true
+      ignore_errors: true
+      when: k8s_desired_state == "absent"
+
     - name: Remove Kubernetes yum packages
       dnf:
         name:
