@@ -1,0 +1,19 @@
+namespace: marcuwynu23
+name: ubuntu_k8s_upstream_bootstrap
+version: 1.0.0
+readme: README.md
+authors:
+- Mark Wayne
+description: "Ansible collection for bootstrapping vanilla upstream Kubernetes (kubeadm) on Ubuntu"
+license: [ "MIT" ]
+tags:
+- linux
+- ubuntu
+- kubernetes
+- kubeadm
+- kubelet
+- kubectl
+- k8s
+- upstream
+- vanilla
+repository: https://github.com/marcuwynu23/ansible-collections

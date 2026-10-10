@@ -1,0 +1,18 @@
+galaxy_info:
+  author: Mark Wayne
+  description: CNI plugin installation for Kubernetes (Flannel, Calico, Cilium, Weave)
+  company: ""
+  license: MIT
+  min_ansible_version: "2.9"
+  galaxy_tags:
+    - linux
+    - ubuntu
+    - kubernetes
+    - cni
+    - flannel
+    - calico
+    - cilium
+    - weave
+    - networking
+
+dependencies: []

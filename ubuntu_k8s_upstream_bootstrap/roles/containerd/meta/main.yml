@@ -1,0 +1,16 @@
+galaxy_info:
+  author: Mark Wayne
+  description: Standalone containerd for vanilla Kubernetes (kubeadm) on Ubuntu
+  company: ""
+  license: MIT
+  min_ansible_version: "2.9"
+  galaxy_tags:
+    - linux
+    - ubuntu
+    - kubernetes
+    - kubeadm
+    - k8s
+    - containerd
+    - cri
+
+dependencies: []

@@ -1,0 +1,62 @@
+---
+# tasks file for cni (Ubuntu)
+# Installs and configures CNI plugin for Kubernetes networking
+
+- name: Set CNI facts
+  set_fact:
+    cni_plugin: "{{ cni_plugin | default('flannel') | lower }}"
+    cni_desired_state: "{{ cni_state | default('present') }}"
+    cni_is_control_plane: "{{ k8s_node_role | default('control-plane') | lower == 'control-plane' }}"
+
+- name: Validate cni_plugin
+  assert:
+    that:
+      - cni_plugin in ["flannel", "calico", "cilium", "weave", "none"]
+    fail_msg: "cni_plugin must be one of: flannel, calico, cilium, weave, none (got '{{ cni_plugin }}')."
+
+- name: Skip CNI if plugin is none
+  debug:
+    msg: "CNI plugin set to 'none', skipping CNI installation."
+  when: cni_plugin == "none"
+
+- name: Skip CNI on worker nodes unless cni_install_on_worker is true
+  debug:
+    msg: "Skipping CNI on worker node (cni_install_on_worker=false). CNI manifests are applied on control-plane only."
+  when:
+    - cni_plugin != "none"
+    - not cni_is_control_plane
+    - cni_install_on_worker | default(false) | bool == false
+
+- name: Install CNI plugin
+  block:
+    - name: Wait for kubeconfig to be available
+      wait_for:
+        path: /etc/kubernetes/admin.conf
+        timeout: 60
+      become: true
+      when: cni_is_control_plane
+
+    - name: Set KUBECONFIG for kubectl
+      set_fact:
+        cni_kubectl_env:
+          KUBECONFIG: /etc/kubernetes/admin.conf
+
+    - name: Install Flannel CNI
+      include_tasks: flannel.yml
+      when: cni_plugin == "flannel"
+
+    - name: Install Calico CNI
+      include_tasks: calico.yml
+      when: cni_plugin == "calico"
+
+    - name: Install Cilium CNI
+      include_tasks: cilium.yml
+      when: cni_plugin == "cilium"
+
+    - name: Install Weave CNI
+      include_tasks: weave.yml
+      when: cni_plugin == "weave"
+
+  when:
+    - cni_plugin != "none"
+    - cni_is_control_plane or (cni_install_on_worker | default(false) | bool)

@@ -1,0 +1,652 @@
+---
+# tasks file for kubernetes (Ubuntu - vanilla upstream Kubernetes).
+# Installs kubeadm, kubelet, kubectl from official Kubernetes apt repositories.
+# Configures kubelet and initializes/joins cluster via kubeadm.
+
+- name: Set Kubernetes facts
+  set_fact:
+    k8s_desired_state: "{{ k8s_state | default('present') }}"
+    k8s_role: "{{ k8s_node_role | default('control-plane') | lower }}"
+    k8s_major_ver: "{{ k8s_major_version | default('') }}"
+    k8s_ver: "{{ k8s_version | default('') }}"
+
+- name: Validate k8s_node_role
+  assert:
+    that:
+      - k8s_role in ["control-plane", "worker"]
+    fail_msg: "k8s_node_role must be 'control-plane' or 'worker' (got '{{ k8s_node_role }}')."
+
+- name: Determine Kubernetes major version for repository
+  set_fact:
+    k8s_repo_major_version: "{{ k8s_major_ver if k8s_major_ver | length > 0 else (k8s_ver.split('.')[0] + '.' + k8s_ver.split('.')[1] if k8s_ver | length > 0 else '1.37') }}"
+  when: k8s_desired_state == "present"
+
+- name: Uninstall Kubernetes when state is absent
+  block:
+    - name: Reset kubeadm (drain node, remove configs)
+      command: kubeadm reset -f --cri-socket {{ k8s_cri_socket }}
+      become: true
+      ignore_errors: true
+      changed_when: true
+      when:
+        - k8s_desired_state == "absent"
+        - k8s_role == "control-plane"
+
+    - name: Reset kubeadm worker (drain node, remove configs)
+      command: kubeadm reset -f --cri-socket {{ k8s_cri_socket }}
+      become: true
+      ignore_errors: true
+      changed_when: true
+      when:
+        - k8s_desired_state == "absent"
+        - k8s_role == "worker"
+
+    - name: Stop and disable kubelet service
+      systemd:
+        name: kubelet
+        state: stopped
+        enabled: false
+        daemon_reload: true
+      become: true
+      ignore_errors: true
+      when: k8s_desired_state == "absent"
+
+    - name: Remove Kubernetes apt packages
+      apt:
+        name:
+          - kubeadm
+          - kubelet
+          - kubectl
+          - kubernetes-cni
+        state: absent
+        autoremove: true
+        purge: true
+      become: true
+      when: k8s_desired_state == "absent"
+
+    - name: Remove Kubernetes apt source list file
+      file:
+        path: /etc/apt/sources.list.d/kubernetes.list
+        state: absent
+      become: true
+      when: k8s_desired_state == "absent"
+
+    - name: Remove Kubernetes GPG key
+      file:
+        path: /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+        state: absent
+      become: true
+      when: k8s_desired_state == "absent"
+
+    - name: Remove temporary Kubernetes GPG ascii key
+      file:
+        path: /tmp/kubernetes-release.key
+        state: absent
+      become: true
+      when: k8s_desired_state == "absent"
+
+    - name: Remove Kubernetes config directories
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/kubernetes
+        - /var/lib/kubelet
+        - /var/lib/etcd
+        - /etc/cni/net.d
+        - /opt/cni/bin
+        - /var/lib/cni
+        - /run/kubernetes
+        - /run/flannel
+        - /run/calico
+        - /run/cilium
+      become: true
+      when: k8s_desired_state == "absent"
+
+    - name: Clean up kubelet config and systemd drop-ins
+      file:
+        path: "{{ item }}"
+        state: absent
+      loop:
+        - /etc/default/kubelet
+        - /etc/sysconfig/kubelet
+        - /etc/systemd/system/kubelet.service.d
+        - /var/lib/kubelet/config.yaml
+        - /var/lib/kubelet/kubeadm-flags.env
+      become: true
+      when: k8s_desired_state == "absent"
+
+    - name: Clean up user kubeconfig directories
+      file:
+        path: "/home/{{ item }}/.kube"
+        state: absent
+      loop: "{{ [ansible_user] if ansible_user is defined and ansible_user != 'root' else [] }}"
+      become: true
+      when: k8s_desired_state == "absent"
+      ignore_errors: true
+
+    - name: Clean up root kubeconfig
+      file:
+        path: /root/.kube
+        state: absent
+      become: true
+      when: k8s_desired_state == "absent"
+
+    - name: Flush iptables rules created by Kubernetes (filter table)
+      command: iptables -F
+      become: true
+      ignore_errors: true
+      changed_when: false
+      when: k8s_desired_state == "absent"
+
+    - name: Flush iptables rules created by Kubernetes (nat table)
+      command: iptables -t nat -F
+      become: true
+      ignore_errors: true
+      changed_when: false
+      when: k8s_desired_state == "absent"
+
+    - name: Flush iptables rules created by Kubernetes (mangle table)
+      command: iptables -t mangle -F
+      become: true
+      ignore_errors: true
+      changed_when: false
+      when: k8s_desired_state == "absent"
+
+    - name: Delete iptables chains created by Kubernetes
+      command: iptables -X
+      become: true
+      ignore_errors: true
+      changed_when: false
+      when: k8s_desired_state == "absent"
+
+    - name: Delete iptables chains created by Kubernetes (nat table)
+      command: iptables -t nat -X
+      become: true
+      ignore_errors: true
+      changed_when: false
+      when: k8s_desired_state == "absent"
+
+    - name: Delete iptables chains created by Kubernetes (mangle table)
+      command: iptables -t mangle -X
+      become: true
+      ignore_errors: true
+      changed_when: false
+      when: k8s_desired_state == "absent"
+
+    - name: Reset iptables default policies
+      command: "{{ item }}"
+      loop:
+        - iptables -P INPUT ACCEPT
+        - iptables -P FORWARD ACCEPT
+        - iptables -P OUTPUT ACCEPT
+        - iptables -t nat -P PREROUTING ACCEPT
+        - iptables -t nat -P INPUT ACCEPT
+        - iptables -t nat -P OUTPUT ACCEPT
+        - iptables -t nat -P POSTROUTING ACCEPT
+        - iptables -t mangle -P PREROUTING ACCEPT
+        - iptables -t mangle -P INPUT ACCEPT
+        - iptables -t mangle -P FORWARD ACCEPT
+        - iptables -t mangle -P OUTPUT ACCEPT
+        - iptables -t mangle -P POSTROUTING ACCEPT
+      become: true
+      ignore_errors: true
+      changed_when: false
+      when: k8s_desired_state == "absent"
+
+    - name: Clean up ipvs rules if any
+      command: ipvsadm -C
+      become: true
+      ignore_errors: true
+      changed_when: false
+      when: k8s_desired_state == "absent"
+
+    - name: Remove CNI network interfaces
+      command: "{{ item }}"
+      loop:
+        - ip link delete cni0 2>/dev/null || true
+        - ip link delete flannel.1 2>/dev/null || true
+        - ip link delete cali* 2>/dev/null || true
+        - ip link delete cilium* 2>/dev/null || true
+        - ip link delete weave 2>/dev/null || true
+        - ip link delete docker0 2>/dev/null || true
+      become: true
+      ignore_errors: true
+      changed_when: false
+      when: k8s_desired_state == "absent"
+
+    - name: Remove kubeadm generated certificates and keys from /etc/kubernetes/pki (if any remain)
+      file:
+        path: /etc/kubernetes/pki
+        state: absent
+      become: true
+      when: k8s_desired_state == "absent"
+
+    - name: Reload systemd after cleanup
+      systemd:
+        daemon_reload: true
+      become: true
+      when: k8s_desired_state == "absent"
+  when: k8s_desired_state == "absent"
+
+- name: Install and configure Kubernetes
+  block:
+    - name: Ensure Kubernetes dependencies are installed (Ubuntu)
+      apt:
+        name:
+          - apt-transport-https
+          - ca-certificates
+          - curl
+          - gnupg
+          - lsb-release
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      become: true
+      retries: 5
+      delay: 10
+      register: k8s_apt_deps
+      until: k8s_apt_deps is not failed
+
+    - name: Create keyrings directory
+      file:
+        path: /etc/apt/keyrings
+        state: directory
+        mode: "0755"
+      become: true
+
+    - name: Download Kubernetes GPG ascii key
+      get_url:
+        url: "{{ k8s_apt_key_base_url }}{{ k8s_repo_major_version }}/deb/Release.key"
+        dest: /tmp/kubernetes-release.key
+        mode: "0644"
+        force: true
+      become: true
+      register: k8s_key_download
+      until: k8s_key_download is not failed
+      retries: 3
+      delay: 5
+
+    - name: Dearmor Kubernetes GPG key for apt signed-by (overwrites bad ascii key from earlier runs)
+      shell: gpg --yes --batch --dearmor -o /etc/apt/keyrings/kubernetes-apt-keyring.gpg /tmp/kubernetes-release.key && chmod 0644 /etc/apt/keyrings/kubernetes-apt-keyring.gpg
+      args:
+        executable: /bin/bash
+      become: true
+      changed_when: true
+      timeout: 60
+
+    - name: Add Kubernetes apt repository
+      apt_repository:
+        repo: "deb [signed-by=/etc/apt/keyrings/kubernetes-apt-keyring.gpg] {{ k8s_apt_repo_base_url }}{{ k8s_repo_major_version }}/deb/ /"
+        state: present
+        filename: kubernetes
+        update_cache: true
+      become: true
+
+    - name: Unhold Kubernetes packages before install (allows repo version switch, e.g. 1.30 -> 1.37)
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: install
+      loop:
+        - kubeadm
+        - kubelet
+        - kubectl
+        - kubernetes-cni
+      become: true
+      failed_when: false
+
+    - name: Install kubeadm, kubelet, kubectl
+      apt:
+        name:
+          - "kubeadm{{ ('=' + k8s_ver) if k8s_ver | length > 0 else '' }}"
+          - "kubelet{{ ('=' + k8s_ver) if k8s_ver | length > 0 else '' }}"
+          - "kubectl{{ ('=' + k8s_ver) if k8s_ver | length > 0 else '' }}"
+          - kubernetes-cni
+        state: present
+        update_cache: true
+        cache_valid_time: 3600
+      become: true
+      retries: 5
+      delay: 10
+      register: k8s_apt_install
+      until: k8s_apt_install is not failed
+
+    - name: Hold Kubernetes packages to prevent accidental upgrades
+      dpkg_selections:
+        name: "{{ item }}"
+        selection: hold
+      loop:
+        - kubeadm
+        - kubelet
+        - kubectl
+        - kubernetes-cni
+      become: true
+      when: k8s_apt_hold | bool
+
+    - name: Detect installed kubeadm minor version
+      shell: |
+        set -o pipefail
+        v=$(kubeadm version -o short 2>/dev/null || true)
+        m=$(echo "$v" | sed -n 's/^v1\.\([0-9][0-9]*\)\..*/\1/p')
+        echo "${m:-37}"
+      args:
+        executable: /bin/bash
+      register: k8s_kubeadm_minor
+      changed_when: false
+      failed_when: false
+      become: true
+
+    - name: Select kubeadm config API version matching the installed binary
+      set_fact:
+        k8s_kubeadm_api_version: "{{ 'kubeadm.k8s.io/v1beta4' if k8s_kubeadm_minor.stdout | int >= 31 else 'kubeadm.k8s.io/v1beta3' }}"
+      when: k8s_kubeadm_minor.stdout is defined
+
+    - name: Configure kubelet CRI socket and extra args
+      lineinfile:
+        path: /etc/default/kubelet
+        regexp: '^KUBELET_EXTRA_ARGS='
+        line: 'KUBELET_EXTRA_ARGS="--container-runtime-endpoint={{ k8s_cri_socket }} {{ k8s_kubelet_extra_args }}"'
+        create: true
+      become: true
+      notify: Restart kubelet
+
+    - name: Enable and start kubelet service
+      systemd:
+        name: kubelet
+        state: started
+        enabled: true
+        daemon_reload: true
+      become: true
+
+    - name: Read current ufw status
+      command: ufw status
+      register: k8s_ufw_status
+      changed_when: false
+      become: true
+      when: k8s_firewall_manage | bool
+
+    - name: Open Kubernetes firewall ports (control-plane)
+      command: "ufw allow {{ item }}"
+      loop:
+        - 6443/tcp   # Kubernetes API server
+        - 2379:2380/tcp  # etcd server client API
+        - 10250/tcp  # Kubelet API
+        - 10251/tcp  # kube-scheduler
+        - 10252/tcp  # kube-controller-manager
+        - 10255/tcp  # read-only Kubelet API (if enabled)
+        - 30000:32767/tcp  # NodePort range
+        - 30000:32767/udp  # NodePort range
+      become: true
+      when:
+        - k8s_firewall_manage | bool
+        - k8s_role == "control-plane"
+        - item not in k8s_ufw_status.stdout
+
+    - name: Open Kubernetes firewall ports (worker)
+      command: "ufw allow {{ item }}"
+      loop:
+        - 10250/tcp  # Kubelet API
+        - 10255/tcp  # read-only Kubelet API (if enabled)
+        - 30000:32767/tcp  # NodePort range
+        - 30000:32767/udp  # NodePort range
+      become: true
+      when:
+        - k8s_firewall_manage | bool
+        - k8s_role == "worker"
+        - item not in k8s_ufw_status.stdout
+
+    - name: Flush pending handlers so containerd picks up SystemdCgroup before kubeadm init
+      meta: flush_handlers
+      when:
+        - k8s_role == "control-plane"
+        - k8s_desired_state == "present"
+
+    - name: Determine effective kubeadm addresses and node name
+      set_fact:
+        k8s_effective_advertise: "{{ k8s_apiserver_advertise_address if k8s_apiserver_advertise_address | length > 0 else ansible_facts['default_ipv4']['address'] }}"
+        k8s_effective_node_name: "{{ k8s_node_name if k8s_node_name | length > 0 else ansible_facts['hostname'] }}"
+      when:
+        - k8s_role == "control-plane"
+        - k8s_desired_state == "present"
+
+    - name: Determine effective control-plane endpoint
+      set_fact:
+        k8s_effective_endpoint: "{{ k8s_control_plane_endpoint if k8s_control_plane_endpoint | length > 0 else k8s_effective_advertise + ':6443' }}"
+      when:
+        - k8s_role == "control-plane"
+        - k8s_desired_state == "present"
+
+    - name: Build kubeadm init config for control-plane
+      set_fact:
+        k8s_init_config: >-
+          {{
+            {
+              'apiVersion': k8s_kubeadm_api_version,
+              'kind': 'InitConfiguration',
+              'localAPIEndpoint': {
+                'advertiseAddress': k8s_effective_advertise,
+                'bindPort': 6443
+              },
+              'nodeRegistration': {
+                'name': k8s_effective_node_name,
+                'criSocket': k8s_cri_socket
+              }
+            }
+            | combine(k8s_kubeadm_config_extra | default({}), recursive=true)
+          }}
+      when:
+        - k8s_role == "control-plane"
+        - k8s_desired_state == "present"
+
+    - name: Build kubeadm cluster config for control-plane
+      set_fact:
+        k8s_cluster_config: >-
+          {{
+            {
+              'apiVersion': k8s_kubeadm_api_version,
+              'kind': 'ClusterConfiguration',
+              'networking': {
+                'podSubnet': k8s_pod_network_cidr,
+                'serviceSubnet': k8s_service_cidr
+              },
+              'controlPlaneEndpoint': k8s_effective_endpoint,
+              'apiServer': {
+                'certSANs': (k8s_kubeadm_config_extra.apiServer.certSANs | default([])) if (k8s_kubeadm_config_extra.apiServer is defined) else []
+              },
+              'controllerManager': {},
+              'scheduler': {}
+            }
+            | combine(k8s_kubeadm_config_extra | default({}), recursive=true)
+          }}
+      when:
+        - k8s_role == "control-plane"
+        - k8s_desired_state == "present"
+
+    - name: Write kubeadm config file (control-plane, multi-doc YAML)
+      copy:
+        dest: "{{ k8s_kubeadm_config_path }}"
+        mode: "0644"
+        content: "{{ k8s_init_config | to_nice_yaml(indent=2) }}---\n{{ k8s_cluster_config | to_nice_yaml(indent=2) }}"
+      become: true
+      when:
+        - k8s_role == "control-plane"
+        - k8s_desired_state == "present"
+
+    - name: Ensure crictl config exists for CRI detection
+      copy:
+        dest: /etc/crictl.yaml
+        mode: "0644"
+        content: |
+          runtime-endpoint: unix:///run/containerd/containerd.sock
+          image-endpoint: unix:///run/containerd/containerd.sock
+          timeout: 10
+          debug: false
+      become: true
+      when:
+        - k8s_role == "control-plane"
+        - k8s_desired_state == "present"
+
+    - name: Initialize Kubernetes control-plane (first node)
+      command: >
+        kubeadm init
+        --config={{ k8s_kubeadm_config_path }}
+        {{ '--ignore-preflight-errors=' + k8s_ignore_preflight_errors if k8s_ignore_preflight_errors | length > 0 else '--ignore-preflight-errors=cri,swap' }}
+        --upload-certs
+      become: true
+      register: k8s_init_result
+      changed_when: "'Your Kubernetes control-plane has initialized successfully' in k8s_init_result.stdout"
+      failed_when: k8s_init_result.rc != 0 and 'already initialized' not in k8s_init_result.stderr
+      retries: 3
+      delay: 30
+      until: k8s_init_result is not failed or 'already initialized' in k8s_init_result.stderr
+      when:
+        - k8s_role == "control-plane"
+        - k8s_desired_state == "present"
+        - k8s_join_token | length == 0
+
+    - name: Join additional control-plane node
+      command: >
+        kubeadm join {{ k8s_control_plane_endpoint }}
+        --token {{ k8s_join_token }}
+        --discovery-token-ca-cert-hash {{ k8s_discovery_token_ca_cert_hash }}
+        --control-plane
+        --certificate-key {{ k8s_certificate_key }}
+        --cri-socket={{ k8s_cri_socket }}
+        {{ '--ignore-preflight-errors=' + k8s_ignore_preflight_errors if k8s_ignore_preflight_errors | length > 0 else '' }}
+      become: true
+      register: k8s_join_cp_result
+      changed_when: "'This node has joined the cluster' in k8s_join_cp_result.stdout"
+      failed_when: k8s_join_cp_result.rc != 0 and 'already joined' not in k8s_join_cp_result.stderr
+      retries: 5
+      delay: 30
+      until: k8s_join_cp_result is not failed or 'already joined' in k8s_join_cp_result.stderr
+      when:
+        - k8s_role == "control-plane"
+        - k8s_desired_state == "present"
+        - k8s_join_token | length > 0
+        - k8s_certificate_key | length > 0
+
+    - name: Ensure crictl config exists for CRI detection
+      copy:
+        dest: /etc/crictl.yaml
+        mode: "0644"
+        content: |
+          runtime-endpoint: unix:///run/containerd/containerd.sock
+          image-endpoint: unix:///run/containerd/containerd.sock
+          timeout: 10
+          debug: false
+      become: true
+      when:
+        - k8s_role == "worker"
+        - k8s_desired_state == "present"
+
+    - name: Join worker node
+      command: >
+        kubeadm join {{ k8s_control_plane_endpoint }}
+        --token {{ k8s_join_token }}
+        --discovery-token-ca-cert-hash {{ k8s_discovery_token_ca_cert_hash }}
+        --cri-socket={{ k8s_cri_socket }}
+        {{ '--ignore-preflight-errors=' + k8s_ignore_preflight_errors if k8s_ignore_preflight_errors | length > 0 else '--ignore-preflight-errors=cri,swap' }}
+      become: true
+      register: k8s_join_worker_result
+      changed_when: "'This node has joined the cluster' in k8s_join_worker_result.stdout"
+      failed_when: k8s_join_worker_result.rc != 0 and 'already joined' not in k8s_join_worker_result.stderr
+      retries: 5
+      delay: 30
+      until: k8s_join_worker_result is not failed or 'already joined' in k8s_join_worker_result.stderr
+      when:
+        - k8s_role == "worker"
+        - k8s_desired_state == "present"
+        - k8s_join_token | length > 0
+        - k8s_discovery_token_ca_cert_hash | length > 0
+
+    - name: Copy admin.conf to root kubeconfig (control-plane)
+      copy:
+        src: /etc/kubernetes/admin.conf
+        dest: /root/.kube/config
+        remote_src: true
+        owner: root
+        group: root
+        mode: "0600"
+      become: true
+      when:
+        - k8s_role == "control-plane"
+        - k8s_desired_state == "present"
+
+    - name: Configure kubectl for non-root user (control-plane)
+      block:
+        - name: Create .kube directory
+          file:
+            path: "/home/{{ ansible_user }}/.kube"
+            state: directory
+            mode: "0755"
+            owner: "{{ ansible_user }}"
+            group: "{{ ansible_user }}"
+          become: true
+
+        - name: Copy admin.conf to user kubeconfig
+          copy:
+            src: /etc/kubernetes/admin.conf
+            dest: "/home/{{ ansible_user }}/.kube/config"
+            remote_src: true
+            owner: "{{ ansible_user }}"
+            group: "{{ ansible_user }}"
+            mode: "0600"
+          become: true
+      when:
+        - k8s_role == "control-plane"
+        - k8s_desired_state == "present"
+        - ansible_user is defined
+        - ansible_user != "root"
+
+    - name: Display kubectl setup instructions
+      debug:
+        msg:
+          - "Control-plane init complete!"
+          - "Kubeconfig copied to /root/.kube/config"
+          - "Kubeconfig copied to /home/{{ ansible_user }}/.kube/config (if ansible_user != root)"
+          - "You can now run: kubectl get nodes"
+          - "Install CNI (e.g. Flannel): kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml"
+      when:
+        - k8s_role == "control-plane"
+        - k8s_desired_state == "present"
+        - k8s_join_token | length == 0
+
+    - name: Wait for kubelet to be ready
+      wait_for:
+        path: /var/run/kubelet.sock
+        timeout: "{{ k8s_wait_timeout }}"
+      become: true
+      when:
+        - k8s_desired_state == "present"
+
+    - name: Show cluster info (control-plane)
+      command: kubectl cluster-info
+      become: true
+      register: k8s_cluster_info
+      changed_when: false
+      when:
+        - k8s_role == "control-plane"
+        - k8s_desired_state == "present"
+      delegate_to: localhost
+      run_once: true
+
+    - name: Display join command for workers (control-plane)
+      command: kubeadm token create --print-join-command
+      become: true
+      register: k8s_join_command
+      changed_when: false
+      when:
+        - k8s_role == "control-plane"
+        - k8s_desired_state == "present"
+        - k8s_join_token | length == 0
+
+    - name: Output join command for workers
+      debug:
+        msg: "Worker join command: {{ k8s_join_command.stdout }}"
+      when:
+        - k8s_role == "control-plane"
+        - k8s_desired_state == "present"
+        - k8s_join_token | length == 0
+        - k8s_join_command is defined
+  when: k8s_desired_state == "present"

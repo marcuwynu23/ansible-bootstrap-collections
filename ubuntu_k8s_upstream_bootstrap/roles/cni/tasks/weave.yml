@@ -1,0 +1,55 @@
+---
+# Weave CNI installation tasks
+
+- name: Get latest Weave version if not specified
+  uri:
+    url: "https://api.github.com/repos/weaveworks/weave/releases/latest"
+    return_content: true
+  register: weave_latest
+  when:
+    - cni_plugin == "weave"
+    - cni_weave_version | length == 0
+
+- name: Set Weave version
+  set_fact:
+    cni_weave_version: "{{ cni_weave_version if cni_weave_version | length > 0 else weave_latest.json.tag_name }}"
+  when: cni_plugin == "weave"
+
+- name: Build Weave manifest URL
+  set_fact:
+    cni_weave_url: "https://cloud.weave.works/k8s/net?k8s-version=$(KUBECONFIG=/etc/kubernetes/admin.conf kubectl version | base64 -w 0)&v={{ cni_weave_version }}"
+
+- name: Check if Weave is already installed
+  shell: |
+    KUBECONFIG=/etc/kubernetes/admin.conf kubectl get daemonset weave-net -n kube-system 2>/dev/null && echo "installed" || echo "not-installed"
+  register: weave_check
+  changed_when: false
+  when:
+    - cni_plugin == "weave"
+    - cni_skip_if_already_installed | bool
+
+- name: Install Weave
+  shell: |
+    KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f "https://cloud.weave.works/k8s/net?k8s-version=$(KUBECONFIG=/etc/kubernetes/admin.conf kubectl version | base64 -w 0)&v={{ cni_weave_version }}"
+  environment: "{{ cni_kubectl_env }}"
+  when:
+    - cni_plugin == "weave"
+    - cni_skip_if_already_installed | bool == false or weave_check.stdout != "installed"
+
+- name: Patch Weave for password if specified
+  shell: |
+    KUBECONFIG=/etc/kubernetes/admin.conf kubectl create secret generic weave-passwd --from-literal=password="{{ cni_weave_password }}" -n kube-system --dry-run=client -o yaml | KUBECONFIG=/etc/kubernetes/admin.conf kubectl apply -f -
+  environment: "{{ cni_kubectl_env }}"
+  when:
+    - cni_plugin == "weave"
+    - cni_weave_password | length > 0
+
+- name: Wait for Weave pods to be ready
+  shell: |
+    KUBECONFIG=/etc/kubernetes/admin.conf kubectl wait --for=condition=Ready pod -l name=weave-net -n kube-system --timeout={{ cni_wait_timeout }}s
+  environment: "{{ cni_kubectl_env }}"
+  retries: 5
+  delay: 10
+  when:
+    - cni_plugin == "weave"
+    - cni_wait_for_ready | bool
