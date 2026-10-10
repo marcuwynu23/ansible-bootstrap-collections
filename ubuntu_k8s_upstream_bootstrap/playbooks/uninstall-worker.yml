@@ -19,7 +19,7 @@
     - roles/containerd
     - roles/pre
   tasks:
-    - name: Re-enable swap (optional - set pre_disable_swap: true to re-enable)
+    - name: "Re-enable swap (optional - set pre_disable_swap: true to re-enable)"
       command: swapon -a
       become: true
       ignore_errors: true
