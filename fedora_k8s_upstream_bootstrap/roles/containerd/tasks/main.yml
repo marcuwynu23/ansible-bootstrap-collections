@@ -34,7 +34,7 @@
     - containerd_enabled | default(true) | bool
     - containerd_desired_state == "present"
 
-- name: Generate containerd config with CRI plugin for Kubernetes (force update)
+- name: Generate containerd config with CRI plugin for Kubernetes
   copy:
     dest: "{{ containerd_config_path }}"
     mode: "0644"
@@ -56,7 +56,6 @@
   when:
     - containerd_enabled | default(true) | bool
     - containerd_desired_state == "present"
-  changed_when: true
 
 - name: Enable and start containerd service
   systemd:

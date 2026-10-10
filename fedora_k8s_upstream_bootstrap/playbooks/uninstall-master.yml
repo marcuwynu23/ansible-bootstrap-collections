@@ -20,7 +20,7 @@
     - roles/containerd
     - roles/pre
   tasks:
-    - name: Re-enable swap (optional - set pre_disable_swap: true to re-enable)
+    - name: "Re-enable swap (optional - set pre_disable_swap: true to re-enable)"
       command: swapon -a
       become: true
       ignore_errors: true
@@ -100,3 +100,35 @@
         line: "SELINUX={{ pre_selinux_state | default('enforcing') }}"
       become: true
       when: pre_selinux_state is defined
+
+    - name: Remove Flannel CNI resources
+      shell: |
+        KUBECONFIG=/etc/kubernetes/admin.conf kubectl delete -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml --ignore-not-found=true 2>/dev/null || true
+      become: true
+      ignore_errors: true
+      changed_when: false
+      when: k8s_desired_state == "absent"
+
+    - name: Remove Calico CNI resources
+      shell: |
+        KUBECONFIG=/etc/kubernetes/admin.conf kubectl delete -f https://raw.githubusercontent.com/projectcalico/calico/v3.27.0/manifests/calico.yaml --ignore-not-found=true 2>/dev/null || true
+      become: true
+      ignore_errors: true
+      changed_when: false
+      when: k8s_desired_state == "absent"
+
+    - name: Remove Cilium CNI resources
+      shell: |
+        KUBECONFIG=/etc/kubernetes/admin.conf cilium uninstall --timeout 60s 2>/dev/null || true
+      become: true
+      ignore_errors: true
+      changed_when: false
+      when: k8s_desired_state == "absent"
+
+    - name: Remove Weave CNI resources
+      shell: |
+        KUBECONFIG=/etc/kubernetes/admin.conf kubectl delete -f "https://cloud.weave.works/k8s/net?k8s-version=$(KUBECONFIG=/etc/kubernetes/admin.conf kubectl version | base64 -w 0)" --ignore-not-found=true 2>/dev/null || true
+      become: true
+      ignore_errors: true
+      changed_when: false
+      when: k8s_desired_state == "absent"

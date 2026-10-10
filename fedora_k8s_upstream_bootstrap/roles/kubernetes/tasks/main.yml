@@ -416,6 +416,16 @@
         - k8s_role == "control-plane"
         - k8s_desired_state == "present"
 
+    - name: Stat kubeadm init marker (skip if already initialized)
+      stat:
+        path: /etc/kubernetes/admin.conf
+      register: admin_conf_stat
+      changed_when: false
+      when:
+        - k8s_role == "control-plane"
+        - k8s_desired_state == "present"
+        - k8s_join_token | length == 0
+
     - name: Initialize Kubernetes control-plane (first node)
       command: >
         kubeadm init
@@ -433,6 +443,18 @@
         - k8s_role == "control-plane"
         - k8s_desired_state == "present"
         - k8s_join_token | length == 0
+        - not admin_conf_stat.stat.exists
+
+    - name: Stat kubeadm join marker (skip if already joined as control-plane)
+      stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf_stat
+      changed_when: false
+      when:
+        - k8s_role == "control-plane"
+        - k8s_desired_state == "present"
+        - k8s_join_token | length > 0
+        - k8s_certificate_key | length > 0
 
     - name: Join additional control-plane node
       command: >
@@ -455,6 +477,7 @@
         - k8s_desired_state == "present"
         - k8s_join_token | length > 0
         - k8s_certificate_key | length > 0
+        - not kubelet_conf_stat.stat.exists
 
     - name: Ensure crictl config exists for CRI detection
       copy:
@@ -469,6 +492,17 @@
       when:
         - k8s_role == "worker"
         - k8s_desired_state == "present"
+
+    - name: Stat kubeadm join marker (skip if already joined as worker)
+      stat:
+        path: /etc/kubernetes/kubelet.conf
+      register: kubelet_conf_stat
+      changed_when: false
+      when:
+        - k8s_role == "worker"
+        - k8s_desired_state == "present"
+        - k8s_join_token | length > 0
+        - k8s_discovery_token_ca_cert_hash | length > 0
 
     - name: Join worker node
       command: >
@@ -489,6 +523,7 @@
         - k8s_desired_state == "present"
         - k8s_join_token | length > 0
         - k8s_discovery_token_ca_cert_hash | length > 0
+        - not kubelet_conf_stat.stat.exists
 
     - name: Copy admin.conf to root kubeconfig (control-plane)
       copy:
@@ -534,32 +569,24 @@
         msg:
           - "Control-plane init complete!"
           - "Kubeconfig copied to /root/.kube/config"
-          - "Kubeconfig copied to /home/{{ ansible_user }}/.kube/config (if ansible_user != root)"
+          - "{{ 'Kubeconfig copied to /home/' + ansible_user + '/.kube/config' if ansible_user is defined and ansible_user != 'root' else 'Running as root - kubeconfig at /root/.kube/config' }}"
           - "You can now run: kubectl get nodes"
-          - "Install CNI (e.g. Flannel): kubectl apply -f https://github.com/flannel-io/flannel/releases/latest/download/kube-flannel.yml"
+          - "CNI ({{ cni_plugin }}) installed automatically - no manual kubectl apply needed"
       when:
         - k8s_role == "control-plane"
         - k8s_desired_state == "present"
         - k8s_join_token | length == 0
 
-    - name: Wait for kubelet to be ready
-      wait_for:
-        path: /var/run/kubelet.sock
-        timeout: "{{ k8s_wait_timeout }}"
+    - name: Wait for kubelet service to be active
+      systemd:
+        name: kubelet
+      register: kubelet_status
+      until: kubelet_status.status.ActiveState == "active"
+      retries: 30
+      delay: 10
       become: true
       when:
         - k8s_desired_state == "present"
-
-    - name: Show cluster info (control-plane)
-      command: kubectl cluster-info
-      become: true
-      register: k8s_cluster_info
-      changed_when: false
-      when:
-        - k8s_role == "control-plane"
-        - k8s_desired_state == "present"
-      delegate_to: localhost
-      run_once: true
 
     - name: Display join command for workers (control-plane)
       command: kubeadm token create --print-join-command
