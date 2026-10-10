@@ -1,0 +1,11 @@
+---
+# defaults file for containerd (Fedora - vanilla Kubernetes)
+# Standalone containerd for vanilla Kubernetes (kubeadm).
+# Set containerd_enabled: false if using a different CRI (e.g., cri-o).
+
+containerd_state: present
+containerd_enabled: true
+containerd_config_path: /etc/containerd/config.toml
+containerd_systemd_cgroup: true
+containerd_version: ""  # Empty = latest from Fedora repos, or pin like "1.7.2-1.fc40"
+containerd_package_name: containerd

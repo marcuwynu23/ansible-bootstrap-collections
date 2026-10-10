@@ -1,0 +1,31 @@
+---
+# defaults file for pre (Fedora - vanilla Kubernetes)
+# Fedora node preparation for vanilla Kubernetes (kubeadm)
+# dnf-based counterpart of the Ubuntu pre role (uses firewalld, SELinux).
+
+pre_hostname: ""
+pre_update_system: true
+pre_disable_swap: true
+pre_firewall_manage: true
+pre_firewall_allow_ssh_port: "22/tcp"
+pre_selinux_state: "permissive"  # enforcing, permissive, disabled
+pre_base_packages:
+  - curl
+  - gnupg2
+  - iptables
+  - iproute
+  - conntrack-tools
+  - socat
+  - ebtables
+  - ethtool
+  - container-selinux
+  - policycoreutils-python-utils
+pre_kernel_modules:
+  - overlay
+  - br_netfilter
+pre_sysctl_params:
+  net.bridge.bridge-nf-call-iptables: 1
+  net.bridge.bridge-nf-call-ip6tables: 1
+  net.ipv4.ip_forward: 1
+  net.ipv4.conf.all.forwarding: 1
+  net.ipv4.conf.default.forwarding: 1

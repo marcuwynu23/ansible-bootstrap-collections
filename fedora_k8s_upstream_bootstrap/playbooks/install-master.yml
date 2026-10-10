@@ -1,0 +1,81 @@
+---
+# Installs the vanilla Kubernetes master on the [master] group (first or additional).
+# Usage:
+#   cp playbooks/inventory.ini.example inventory.ini  # adjust hosts/key
+#   ansible-playbook -i inventory.ini playbooks/install-master.yml
+- name: Install vanilla Kubernetes master node on Fedora
+  hosts: master
+  become: true
+  vars:
+    # OS preparation
+    pre_hostname: ""
+    pre_update_system: true
+    pre_disable_swap: true
+    pre_firewall_manage: true
+    pre_selinux_state: "permissive"
+    # Kubernetes version (empty = latest stable from repository)
+    # Pin a version like "1.37.0-150500.1.1" or "1.36.3-150500.1.1"
+    k8s_version: ""
+    # Major version for repository (e.g., "1.37", "1.36"). Auto-derived if empty.
+    k8s_major_version: ""
+    # kubeadm config API version (v1beta4 for K8s >= 1.31, v1beta3 for <= 1.30)
+    k8s_kubeadm_api_version: "kubeadm.k8s.io/v1beta4"
+    # Control plane endpoint (for HA). Format: "host:port" or "ip:port"
+    k8s_control_plane_endpoint: ""
+    # Pod network CIDR (required for first control-plane)
+    # Flannel: "10.244.0.0/16", Calico: "192.168.0.0/16"
+    k8s_pod_network_cidr: "10.244.0.0/16"
+    # Service CIDR
+    k8s_service_cidr: "10.96.0.0/12"
+    # API server advertise address (auto-detected if empty)
+    k8s_apiserver_advertise_address: ""
+    # Node name (defaults to hostname)
+    k8s_node_name: ""
+    # Join token for additional control-planes (get from first control-plane: kubeadm token generate)
+    k8s_join_token: ""
+    # CA cert hash for additional control-planes (get from first control-plane)
+    k8s_discovery_token_ca_cert_hash: ""
+    # Certificate key for additional control-planes (get from first control-plane: kubeadm init phase upload-certs --upload-certs)
+    k8s_certificate_key: ""
+    # Containerd (CRI)
+    containerd_enabled: true
+    containerd_state: present
+    # Firewall
+    k8s_firewall_manage: true
+    # CNI plugin: flannel, calico, cilium, weave, or none
+    cni_plugin: "flannel"
+    cni_version: ""
+    # Flannel specific
+    cni_flannel_iface: ""
+    cni_flannel_backend: "vxlan"
+    # Calico specific (must match k8s_pod_network_cidr)
+    cni_calico_ipv4pool_cidr: "{{ k8s_pod_network_cidr }}"
+    cni_calico_ipv4pool_ipip: "Always"
+    cni_calico_ipv4pool_vxlan: "Never"
+    cni_calico_vxlan_port: 4789
+    cni_calico_vxlan_vni: 4096
+    cni_calico_mtu: 1500
+    # Cilium specific
+    cni_cilium_version: ""
+    cni_cilium_install_method: "cli"
+    cni_cilium_kube_proxy_replacement: "strict"
+    cni_cilium_hubble_enabled: true
+    # Weave specific
+    cni_weave_version: ""
+    cni_weave_password: ""
+    # CNI general
+    cni_install_timeout: 300
+    cni_skip_if_already_installed: true
+    cni_wait_for_ready: true
+    cni_wait_timeout: 300
+  roles:
+    - roles/pre
+    - roles/containerd
+    - roles/kubernetes
+    - roles/cni
+  # After install, get the worker join command with:
+  #   kubeadm token create --print-join-command
+  # Get CA cert hash with:
+  #   openssl x509 -pubkey -in /etc/kubernetes/pki/ca.crt | openssl rsa -pubin -outform der 2>/dev/null | openssl dgst -sha256 -hex | sed 's/^.* //'
+  # Get certificate key for additional control-planes with:
+  #   kubeadm init phase upload-certs --upload-certs

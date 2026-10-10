@@ -1,0 +1,98 @@
+---
+# Uninstalls vanilla Kubernetes worker on the [worker] group.
+# Also cleans up OS preparation (firewall, sysctl, kernel modules, swap, SELinux, etc.)
+# Usage:
+#   ansible-playbook -i inventory.ini playbooks/uninstall-worker.yml
+- name: Uninstall vanilla Kubernetes worker node on Fedora
+  hosts: worker
+  become: true
+  vars:
+    k8s_state: absent
+    k8s_node_role: worker
+    containerd_state: absent
+    # Pre role cleanup
+    pre_firewall_manage: true
+    pre_disable_swap: false  # Don't re-enable swap automatically
+    pre_update_system: false
+    pre_selinux_state: "enforcing"  # Restore SELinux to enforcing
+  roles:
+    - roles/kubernetes
+    - roles/containerd
+    - roles/pre
+  tasks:
+    - name: Re-enable swap (optional - set pre_disable_swap: true to re-enable)
+      command: swapon -a
+      become: true
+      ignore_errors: true
+      changed_when: false
+      when: pre_disable_swap | default(false) | bool
+
+    - name: Remove Kubernetes sysctl config
+      file:
+        path: /etc/sysctl.d/99-k8s.conf
+        state: absent
+      become: true
+
+    - name: Remove kernel modules config
+      file:
+        path: /etc/modules-load.d/k8s.conf
+        state: absent
+      become: true
+
+    - name: Unload kernel modules (br_netfilter, overlay)
+      modprobe:
+        name: "{{ item }}"
+        state: absent
+      loop:
+        - br_netfilter
+        - overlay
+      become: true
+      ignore_errors: true
+
+    - name: Reload sysctl after cleanup
+      command: sysctl --system
+      become: true
+      changed_when: false
+
+    - name: Remove firewalld rules for Kubernetes ports
+      firewalld:
+        port: "{{ item }}"
+        permanent: true
+        immediate: true
+        state: disabled
+      loop:
+        - 10250/tcp
+        - 10255/tcp
+        - 30000-32767/tcp
+        - 30000-32767/udp
+      become: true
+      ignore_errors: true
+      when: pre_firewall_manage | bool
+
+    - name: Remove containerd firewalld rules if any
+      firewalld:
+        port: "{{ item }}"
+        permanent: true
+        immediate: true
+        state: disabled
+      loop:
+        - 2375/tcp
+        - 2376/tcp
+      become: true
+      ignore_errors: true
+      when: pre_firewall_manage | bool
+
+    - name: Restore SELinux to enforcing (if it was changed)
+      selinux:
+        policy: targeted
+        state: "{{ pre_selinux_state | default('enforcing') }}"
+      become: true
+      when: pre_selinux_state is defined
+
+    - name: Persist SELinux setting in /etc/selinux/config
+      lineinfile:
+        path: /etc/selinux/config
+        regexp: '^SELINUX='
+        line: "SELINUX={{ pre_selinux_state | default('enforcing') }}"
+      become: true
+      when: pre_selinux_state is defined

@@ -1,0 +1,41 @@
+---
+# defaults file for cni (Ubuntu)
+# CNI plugin selection and configuration for Kubernetes networking
+
+# CNI plugin to install: flannel, calico, cilium, weave, or none
+cni_plugin: "flannel"
+
+# CNI plugin version (empty = latest compatible)
+cni_version: ""
+
+# Flannel configuration
+cni_flannel_iface: ""  # Network interface to use (auto-detected if empty)
+cni_flannel_backend: "vxlan"  # vxlan, host-gw, wireguard, ipsec
+
+# Calico configuration
+cni_calico_version: ""
+cni_calico_ipv4pool_cidr: "192.168.0.0/16"  # Must match k8s_pod_network_cidr
+cni_calico_ipv4pool_ipip: "Always"
+cni_calico_ipv4pool_vxlan: "Never"
+cni_calico_vxlan_port: 4789
+cni_calico_vxlan_vni: 4096
+cni_calico_mtu: 1500
+
+# Cilium configuration
+cni_cilium_version: ""
+cni_cilium_install_method: "cli"  # cli, helm
+cni_cilium_kube_proxy_replacement: "strict"  # disabled, partial, strict
+cni_cilium_hubble_enabled: true
+
+# Weave configuration
+cni_weave_version: ""
+cni_weave_password: ""  # If set, enables encryption
+
+# General CNI settings
+cni_install_timeout: 300
+cni_skip_if_already_installed: true
+cni_wait_for_ready: true
+cni_wait_timeout: 300
+
+# Whether to install CNI on worker nodes (usually only master applies manifests)
+cni_install_on_worker: false

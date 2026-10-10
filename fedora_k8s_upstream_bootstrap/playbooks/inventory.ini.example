@@ -1,0 +1,19 @@
+# Copy to inventory.ini and adjust hosts. Connects with an SSH key only:
+# no passwords, no prompts. The key must already be trusted by the targets
+# (public key in the remote user's authorized_keys).
+[master]
+k8s-master-1 ansible_host=192.168.1.100
+
+[worker]
+k8s-worker-1 ansible_host=192.168.1.101
+k8s-worker-2 ansible_host=192.168.1.102
+
+[k8s:children]
+master
+worker
+
+[k8s:vars]
+ansible_user=fedora
+ansible_python_interpreter=/usr/bin/python3
+ansible_ssh_private_key_file=~/.ssh/id_ed25519
+ansible_ssh_common_args=-o PubkeyAuthentication=yes -o PasswordAuthentication=no -o StrictHostKeyChecking=accept-new

@@ -1,0 +1,123 @@
+---
+# Fedora preparation for vanilla Kubernetes (kubeadm) nodes.
+# dnf-based counterpart of the Ubuntu pre role (uses firewalld, SELinux).
+
+- name: Check that target is a Fedora / RHEL family host
+  assert:
+    that:
+      - ansible_facts["os_family"] == "RedHat"
+    fail_msg: "The pre role only supports Fedora / RHEL family hosts (got {{ ansible_facts['os_family'] }} / {{ ansible_facts['distribution'] }})."
+    success_msg: "Preparing {{ ansible_facts['distribution'] }} {{ ansible_facts['distribution_version'] }} for vanilla Kubernetes."
+
+- name: Set hostname when pre_hostname is defined
+  hostname:
+    name: "{{ pre_hostname }}"
+  become: true
+  when: pre_hostname | length > 0
+
+- name: Update all system packages (dnf upgrade)
+  dnf:
+    name: "*"
+    state: latest
+  become: true
+  retries: 3
+  delay: 10
+  register: pre_dnf_upgrade
+  until: pre_dnf_upgrade is not failed
+  when: pre_update_system | bool
+
+- name: Install base packages for Kubernetes
+  dnf:
+    name: "{{ pre_base_packages }}"
+    state: present
+  become: true
+  retries: 5
+  delay: 10
+  register: pre_dnf_base
+  until: pre_dnf_base is not failed
+
+- name: Set SELinux to permissive (required for Kubernetes)
+  selinux:
+    policy: targeted
+    state: "{{ pre_selinux_state }}"
+  become: true
+  register: pre_selinux_set
+  when: pre_selinux_state is defined
+
+- name: Persist SELinux setting in /etc/selinux/config
+  lineinfile:
+    path: /etc/selinux/config
+    regexp: '^SELINUX='
+    line: "SELINUX={{ pre_selinux_state }}"
+  become: true
+  when: pre_selinux_state is defined
+
+- name: Open Kubernetes firewall ports (firewalld)
+  firewalld:
+    port: "{{ item }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  loop: "{{ pre_firewall_ports | default([]) }}"
+  become: true
+  when: pre_firewall_manage | bool
+
+- name: Allow SSH in firewalld (avoid locking yourself out)
+  firewalld:
+    port: "{{ pre_firewall_allow_ssh_port }}"
+    permanent: true
+    immediate: true
+    state: enabled
+  become: true
+  when:
+    - pre_firewall_manage | bool
+    - pre_firewall_allow_ssh_port | length > 0
+
+- name: Disable swap at runtime (required by Kubernetes)
+  command: swapoff -a
+  changed_when: true
+  become: true
+  when:
+    - pre_disable_swap | bool
+    - ansible_facts["swaptotal_mb"] | default(0) | int > 0
+
+- name: Remove swap entries from /etc/fstab (persist across reboots)
+  mount:
+    name: swap
+    fstype: swap
+    state: absent
+  become: true
+  when: pre_disable_swap | bool
+
+- name: Comment out any remaining swap lines in /etc/fstab
+  replace:
+    path: /etc/fstab
+    regexp: '^([^#\s].*\sswap\s.*)$'
+    replace: '# \1'
+  become: true
+  when: pre_disable_swap | bool
+
+- name: Persist required kernel modules in /etc/modules-load.d/k8s.conf
+  copy:
+    dest: /etc/modules-load.d/k8s.conf
+    mode: "0644"
+    content: "{{ pre_kernel_modules | join('\n') }}\n"
+  become: true
+  notify: Reload sysctl
+
+- name: Load required kernel modules now
+  modprobe:
+    name: "{{ item }}"
+    state: present
+  loop: "{{ pre_kernel_modules }}"
+  become: true
+
+- name: Apply Kubernetes sysctl parameters
+  sysctl:
+    name: "{{ item.key }}"
+    value: "{{ item.value }}"
+    sysctl_file: /etc/sysctl.d/99-k8s.conf
+    state: present
+    reload: true
+  loop: "{{ pre_sysctl_params | dict2items }}"
+  become: true

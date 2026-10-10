@@ -1,0 +1,49 @@
+---
+# Joins vanilla Kubernetes workers on the [worker] group to an existing control-plane.
+# Requires k8s_control_plane_endpoint + k8s_join_token + k8s_discovery_token_ca_cert_hash
+# Usage:
+#   ansible-playbook -i inventory.ini playbooks/install-worker.yml \
+#     -e k8s_control_plane_endpoint=https://192.168.1.100:6443 \
+#     -e k8s_join_token=<token> \
+#     -e k8s_discovery_token_ca_cert_hash=sha256:<hash>
+- name: Install vanilla Kubernetes worker node on Fedora
+  hosts: worker
+  become: true
+  vars:
+    # OS preparation
+    pre_hostname: ""
+    pre_update_system: true
+    pre_disable_swap: true
+    pre_firewall_manage: true
+    pre_selinux_state: "permissive"
+    # Kubernetes version (must match control-plane)
+    k8s_version: ""
+    k8s_major_version: ""
+    # Required: point at an existing Kubernetes control-plane
+    # Format: "host:port" or "ip:port" (default port 6443)
+    k8s_control_plane_endpoint: "https://192.168.1.100:6443"
+    # Required: join token from control-plane
+    # Get with: kubeadm token create
+    k8s_join_token: "<get-token-from-control-plane>"
+    # Required: CA cert hash for discovery
+    # Get with: openssl x509 -pubkey -in /etc/kubernetes/pki/ca.crt | openssl rsa -pubin -outform der 2>/dev/null | openssl dgst -sha256 -hex | sed 's/^.* //'
+    k8s_discovery_token_ca_cert_hash: "sha256:<get-hash-from-control-plane>"
+    # Containerd (CRI)
+    containerd_enabled: true
+    containerd_state: present
+    # Firewall
+    k8s_firewall_manage: true
+  roles:
+    - roles/pre
+    - roles/containerd
+    - roles/kubernetes
+  pre_tasks:
+    - name: Require Kubernetes join variables for workers
+      assert:
+        that:
+          - k8s_control_plane_endpoint | length > 0
+          - k8s_join_token | length > 0
+          - k8s_join_token != "<get-token-from-control-plane>"
+          - k8s_discovery_token_ca_cert_hash | length > 0
+          - k8s_discovery_token_ca_cert_hash != "sha256:<get-hash-from-control-plane>"
+        fail_msg: "Set k8s_control_plane_endpoint, k8s_join_token, and k8s_discovery_token_ca_cert_hash (from the control-plane) to join workers."

@@ -1,0 +1,17 @@
+galaxy_info:
+  author: Mark Wayne
+  description: Fedora node preparation for vanilla Kubernetes (kubeadm)
+  company: ""
+  license: MIT
+  min_ansible_version: "2.9"
+  galaxy_tags:
+    - linux
+    - fedora
+    - rhel
+    - kubernetes
+    - kubeadm
+    - k8s
+    - pre
+    - preparation
+
+dependencies: []

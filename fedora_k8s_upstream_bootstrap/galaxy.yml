@@ -1,0 +1,20 @@
+namespace: marcuwynu23
+name: fedora_k8s_upstream_bootstrap
+version: 1.0.0
+readme: README.md
+authors:
+- Mark Wayne
+description: "Ansible collection for bootstrapping vanilla upstream Kubernetes (kubeadm) on Fedora"
+license: [ "MIT" ]
+tags:
+- linux
+- fedora
+- rhel
+- kubernetes
+- kubeadm
+- kubelet
+- kubectl
+- k8s
+- upstream
+- vanilla
+repository: https://github.com/marcuwynu23/ansible-collections

@@ -1,0 +1,18 @@
+galaxy_info:
+  author: Mark Wayne
+  description: Vanilla upstream Kubernetes (kubeadm/kubelet/kubectl) on Fedora
+  company: ""
+  license: MIT
+  min_ansible_version: "2.9"
+  galaxy_tags:
+    - linux
+    - fedora
+    - rhel
+    - kubernetes
+    - kubeadm
+    - kubelet
+    - kubectl
+    - k8s
+    - upstream
+
+dependencies: []

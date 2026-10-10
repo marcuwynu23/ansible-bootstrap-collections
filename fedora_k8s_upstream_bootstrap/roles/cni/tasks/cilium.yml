@@ -1,0 +1,55 @@
+---
+# Cilium CNI installation tasks
+
+- name: Get latest Cilium CLI version if not specified
+  uri:
+    url: "https://api.github.com/repos/cilium/cilium-cli/releases/latest"
+    return_content: true
+  register: cilium_cli_latest
+  when:
+    - cni_plugin == "cilium"
+    - cni_cilium_version | length == 0
+
+- name: Set Cilium version
+  set_fact:
+    cni_cilium_version: "{{ cni_cilium_version if cni_cilium_version | length > 0 else cilium_cli_latest.json.tag_name }}"
+  when: cni_plugin == "cilium"
+
+- name: Install Cilium CLI
+  shell: |
+    CILIUM_CLI_VERSION="{{ cni_cilium_version }}"
+    curl -L --fail --remote-name-all https://github.com/cilium/cilium-cli/releases/download/${CILIUM_CLI_VERSION}/cilium-linux-amd64.tar.gz
+    tar xzvfC cilium-linux-amd64.tar.gz /usr/local/bin
+    rm cilium-linux-amd64.tar.gz
+  args:
+    creates: /usr/local/bin/cilium
+  when: cni_plugin == "cilium"
+
+- name: Check if Cilium is already installed
+  shell: |
+    KUBECONFIG=/etc/kubernetes/admin.conf cilium status --wait 5s 2>/dev/null && echo "installed" || echo "not-installed"
+  register: cilium_check
+  changed_when: false
+  when:
+    - cni_plugin == "cilium"
+    - cni_skip_if_already_installed | bool
+
+- name: Install Cilium
+  shell: |
+    KUBECONFIG=/etc/kubernetes/admin.conf cilium install \
+      --version {{ cni_cilium_version }} \
+      --set kubeProxyReplacement={{ cni_cilium_kube_proxy_replacement }} \
+      --set hubble.enabled={{ cni_cilium_hubble_enabled | lower }} \
+      --wait --timeout {{ cni_install_timeout }}s
+  environment: "{{ cni_kubectl_env }}"
+  when:
+    - cni_plugin == "cilium"
+    - cni_skip_if_already_installed | bool == false or cilium_check.stdout != "installed"
+
+- name: Wait for Cilium to be ready
+  shell: |
+    KUBECONFIG=/etc/kubernetes/admin.conf cilium status --wait {{ cni_wait_timeout }}s
+  environment: "{{ cni_kubectl_env }}"
+  when:
+    - cni_plugin == "cilium"
+    - cni_wait_for_ready | bool

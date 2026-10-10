@@ -1,0 +1,7 @@
+---
+# handlers file for pre (Fedora)
+
+- name: Reload sysctl
+  command: sysctl --system
+  become: true
+  changed_when: true

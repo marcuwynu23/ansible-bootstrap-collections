@@ -1,0 +1,158 @@
+---
+# tasks file for containerd (Fedora, dnf-based).
+# Installs and configures standalone containerd for vanilla Kubernetes (kubeadm).
+
+- name: Set desired containerd state
+  set_fact:
+    containerd_desired_state: "{{ containerd_state | default('present') }}"
+
+- name: Skip containerd management when disabled
+  debug:
+    msg: "containerd role skipped (containerd_enabled=false). Using alternative CRI."
+  when: not (containerd_enabled | default(true) | bool)
+
+- name: Install containerd package (Fedora)
+  dnf:
+    name: "{{ containerd_package_name }}{{ ('-' + containerd_version) if containerd_version | length > 0 else '' }}"
+    state: present
+  become: true
+  retries: 5
+  delay: 10
+  register: containerd_dnf_install
+  until: containerd_dnf_install is not failed
+  when:
+    - containerd_enabled | default(true) | bool
+    - containerd_desired_state == "present"
+
+- name: Create containerd config directory
+  file:
+    path: "{{ containerd_config_path | dirname }}"
+    state: directory
+    mode: "0755"
+  become: true
+  when:
+    - containerd_enabled | default(true) | bool
+    - containerd_desired_state == "present"
+
+- name: Generate containerd config with CRI plugin for Kubernetes (force update)
+  copy:
+    dest: "{{ containerd_config_path }}"
+    mode: "0644"
+    content: |
+      version = 2
+      [plugins."io.containerd.grpc.v1.cri"]
+        sandbox_image = "registry.k8s.io/pause:3.10"
+        [plugins."io.containerd.grpc.v1.cri".containerd]
+          [plugins."io.containerd.grpc.v1.cri".containerd.runtimes]
+            [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc]
+              runtime_type = "io.containerd.runc.v2"
+              [plugins."io.containerd.grpc.v1.cri".containerd.runtimes.runc.options]
+                SystemdCgroup = true
+        [plugins."io.containerd.grpc.v1.cri".cni]
+          bin_dir = "/opt/cni/bin"
+          conf_dir = "/etc/cni/net.d"
+  become: true
+  notify: Restart containerd
+  when:
+    - containerd_enabled | default(true) | bool
+    - containerd_desired_state == "present"
+  changed_when: true
+
+- name: Enable and start containerd service
+  systemd:
+    name: containerd
+    state: started
+    enabled: true
+    daemon_reload: true
+  become: true
+  when:
+    - containerd_enabled | default(true) | bool
+    - containerd_desired_state == "present"
+
+- name: Create crictl config for kubeadm CRI detection
+  copy:
+    dest: /etc/crictl.yaml
+    mode: "0644"
+    content: |
+      runtime-endpoint: unix:///run/containerd/containerd.sock
+      image-endpoint: unix:///run/containerd/containerd.sock
+      timeout: 10
+      debug: false
+  become: true
+  when:
+    - containerd_enabled | default(true) | bool
+    - containerd_desired_state == "present"
+
+- name: Stop and disable containerd service when removing
+  systemd:
+    name: containerd
+    state: stopped
+    enabled: false
+  become: true
+  ignore_errors: true
+  when:
+    - containerd_enabled | default(true) | bool
+    - containerd_desired_state == "absent"
+
+- name: Remove containerd package when absent
+  dnf:
+    name: "{{ containerd_package_name }}"
+    state: absent
+    autoremove: true
+  become: true
+  when:
+    - containerd_enabled | default(true) | bool
+    - containerd_desired_state == "absent"
+
+- name: Remove containerd config when absent
+  file:
+    path: "{{ containerd_config_path }}"
+    state: absent
+  become: true
+  when:
+    - containerd_enabled | default(true) | bool
+    - containerd_desired_state == "absent"
+
+- name: Remove crictl config when absent
+  file:
+    path: /etc/crictl.yaml
+    state: absent
+  become: true
+  when:
+    - containerd_enabled | default(true) | bool
+    - containerd_desired_state == "absent"
+
+- name: Remove containerd data directories when absent
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /var/lib/containerd
+    - /etc/containerd
+    - /run/containerd
+    - /opt/containerd
+  become: true
+  when:
+    - containerd_enabled | default(true) | bool
+    - containerd_desired_state == "absent"
+
+- name: Remove containerd systemd unit files if any
+  file:
+    path: "{{ item }}"
+    state: absent
+  loop:
+    - /etc/systemd/system/containerd.service
+    - /etc/systemd/system/containerd.service.d
+    - /usr/lib/systemd/system/containerd.service
+  become: true
+  when:
+    - containerd_enabled | default(true) | bool
+    - containerd_desired_state == "absent"
+
+- name: Reload systemd after containerd removal
+  systemd:
+    daemon_reload: true
+  become: true
+  when:
+    - containerd_enabled | default(true) | bool
+    - containerd_desired_state == "absent"
